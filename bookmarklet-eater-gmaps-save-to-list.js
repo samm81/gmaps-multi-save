@@ -1,4 +1,9 @@
-//javascript:
+function preamble() {
+  return `
+placeholder for content of bookmarklet-eater-gmaps-save-to-list-helper.js
+`;
+}
+
 function processCard(card) {
   console.log(`card ${card}`);
   const nameEl = card.querySelector("h1");
@@ -34,6 +39,13 @@ function scrapeFromPage() {
   console.log(`eaterListTitleEl ${eaterListTitleEl}`);
   const eaterListTitle = eaterListTitleEl.innerText;
   console.log(`eaterListTitle ${eaterListTitle}`);
+  const updatedEl = document.querySelector(
+    '.c-mapstack__headline [data-ui="timestamp"]'
+  );
+  console.log(`updatedEl ${updatedEl}`);
+  const updated = updatedEl.innerText;
+  console.log(`updated ${updated}`);
+
   const cardEls = Array.from(
     document.querySelectorAll("#content .c-mapstack__card")
   );
@@ -48,30 +60,41 @@ function scrapeFromPage() {
   const cardData = cards.map(processCard);
   console.log(`cardData ${cardData}`);
 
-  return [eaterListTitle, cardData];
+  return [eaterListTitle, updated, cardData];
 }
 
-function noteForDatum(cardDatum, eaterListTitle) {
-  return "Eater - " + eaterListTitle + "\\n\\n" + cardDatum.description;
+function noteForDatum(cardDatum, eaterListTitle, updated) {
+  return (
+    "Eater - " +
+    eaterListTitle +
+    " (updated " +
+    updated +
+    ")" +
+    "\\n\\n" +
+    cardDatum.description
+  );
 }
 
-function genScript(cardData, listName, eaterListTitle) {
+function genScript(cardData, listName, eaterListTitle, updated) {
+  const cardDataCount = cardData.length;
   const handleCardsStr = cardData
-    .map((cardDatum) => {
-      const note = noteForDatum(cardDatum, eaterListTitle);
+    .map((cardDatum, index) => {
+      const note = noteForDatum(cardDatum, eaterListTitle, updated);
       const url = cardDatum.gmaps;
-      return `.then(() => handleCard("${url}", "${listName}", '${note}'))`;
+      return `.then(() => handleCard("${cardDatum.name}", "${url}", "${listName}", '${note}', ${index}, ${cardDataCount}))`;
     })
     .join("\n");
 
-  return `(() => Promise.resolve())()\n${handleCardsStr};`;
+  return `${preamble()}\n(() => Promise.resolve())()\n${handleCardsStr};`;
 }
 
 function bookmarklet() {
-  const listName = "paris";
+  const listName = prompt(
+    "please enter the exact name of the google maps list (must already exist!)"
+  );
 
-  const [eaterListTitle, cardData] = scrapeFromPage();
-  const script = genScript(cardData, listName, eaterListTitle);
+  const [eaterListTitle, updated, cardData] = scrapeFromPage();
+  const script = genScript(cardData, listName, eaterListTitle, updated);
   navigator.clipboard.writeText(script);
 
   alert("script copied to clipboard!");
