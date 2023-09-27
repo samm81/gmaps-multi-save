@@ -64,15 +64,11 @@ function scrapeFromPage() {
 }
 
 function noteForDatum(cardDatum, eaterListTitle, updated) {
-  return (
-    "Eater - " +
-    eaterListTitle +
-    " (updated " +
-    updated +
-    ")" +
-    "\\n\\n" +
-    cardDatum.description
-  );
+  return `Eater - ${eaterListTitle} (updated ${updated})\\n\\n${cardDatum.description}`;
+}
+
+function escapeSingleQuotes(str) {
+  return str.replace(/'/g, "\\'");
 }
 
 function genScript(cardData, listName, eaterListTitle, updated) {
@@ -81,7 +77,11 @@ function genScript(cardData, listName, eaterListTitle, updated) {
     .map((cardDatum, index) => {
       const note = noteForDatum(cardDatum, eaterListTitle, updated);
       const url = cardDatum.gmaps;
-      return `.then(() => handleCard("${cardDatum.name}", "${url}", "${listName}", '${note}', ${index}, ${cardDataCount}))`;
+      return `.then(() => handleCard("${
+        cardDatum.name
+      }", "${url}", "${listName}", '${escapeSingleQuotes(
+        note
+      )}', ${index}, ${cardDataCount}))`;
     })
     .join("\n");
 
