@@ -1,0 +1,28 @@
+{
+  "name": "gmaps-multi-save",
+  "version": "0.0.1",
+  "description": "import from popular travel websites to google maps lists",
+  "main": "bookmarklet-eater-gmaps-save-to-list-helper.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samm81/gmaps-multi-save.git"
+  },
+  "keywords": [
+    "bookmarklet",
+    "google",
+    "maps",
+    "lists"
+  ],
+  "author": "@samm81",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/samm81/gmaps-multi-save/issues"
+  },
+  "homepage": "https://github.com/samm81/gmaps-multi-save#readme",
+  "dependencies": {
+    "terser": "^5.20.0"
+  }
+}
