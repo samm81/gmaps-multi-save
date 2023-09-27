@@ -73,19 +73,19 @@ function escapeSingleQuotes(str) {
 
 function genScript(cardData, listName, eaterListTitle, updated) {
   const cardDataCount = cardData.length;
-  const handleCardsStr = cardData
+  const addUrlToListsStr = cardData
     .map((cardDatum, index) => {
       const note = noteForDatum(cardDatum, eaterListTitle, updated);
       const url = cardDatum.gmaps;
-      return `.then(() => handleCard("${
+      return `.then(() => addUrlToList("${
         cardDatum.name
-      }", "${url}", "${listName}", '${escapeSingleQuotes(
-        note
-      )}', ${index}, ${cardDataCount}))`;
+      }", "${url}", "${listName}", '${escapeSingleQuotes(note)}', "[${
+        index + 1
+      } / ${cardDataCount}]"))`;
     })
     .join("\n");
 
-  return `${preamble()}\n(() => Promise.resolve())()\n${handleCardsStr};`;
+  return `${preamble()}\n(() => Promise.resolve())()\n${addUrlToListsStr};`;
 }
 
 function bookmarklet() {

@@ -72,8 +72,8 @@ function checkClickable(btn, resolve, startTime) {
   }, 200);
 }
 
-function handleCard(name, url, listName, note, index, cardCount) {
-  logPrefixSet(`[eater-to-gmaps][${name}][${index + 1} / ${cardCount}]`);
+function addUrlToList(name, url, listName, note, loggingNote) {
+  logPrefixSet(`[gmaps-add][${name}][${loggingNote}]`);
 
   return goToUrl(url)
     .then(rest)
