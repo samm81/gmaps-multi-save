@@ -18,7 +18,7 @@ populating these lists used to be a terribly manual ordeal. not anymore 😎
 
 1. save the bookmark
 
-https://raw.githubusercontent.com/samm81/gmaps-multi-save/main/assets/setup.mp4
+https://github.com/samm81/gmaps-multi-save/assets/1221372/4176953e-256a-4dc8-aa52-33bee90093ae
 
 ### usage
 
@@ -34,7 +34,7 @@ https://raw.githubusercontent.com/samm81/gmaps-multi-save/main/assets/setup.mp4
 1. paste into console
 1. hit enter and watch it run!
 
-https://raw.githubusercontent.com/samm81/gmaps-multi-save/main/assets/usage.mp4
+https://github.com/samm81/gmaps-multi-save/assets/1221372/8ce649e8-b218-448b-aeef-77f05ff8d563
 
 ### notes
 
