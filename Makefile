@@ -9,7 +9,9 @@ MAKEFLAGS += --no-builtin-rules
 TERSER := npx terser
 TERSER_FLAGS := --compress ecma=2020
 
-build: bookmarklet.js
+README_EATER_BOOKMARKLET_PLACEHOLDER := javascript: alert("eater-gmaps bookmarklet placeholder");
+
+build: bookmarklet-eater.js readme.md
 .PHONY: build
 
 node_modules:
@@ -28,7 +30,6 @@ bookmarklet-eater.js: node_modules gmaps-add.js from-eater.js
 		| sed 's/`/\\`/g' \
 		| sed 's/\$$/\\$$/g'
 
-	# might have to `sed 's/"/&quot;/g'` the `build/helper-compressed.js` in order to be able to put it inside an `<a href="...">` tag
 	cat > build/from-eater-raw.js \
 		<(echo '(() => {') \
 		<(echo '  function preamble() {') \
@@ -49,3 +50,14 @@ bookmarklet-eater.js: node_modules gmaps-add.js from-eater.js
 		<(cat build/from-eater-compressed.js)
 
 	rm -rf build/
+
+readme.md: bookmarklet-eater.js readme.tmpl.md
+	echo "<!-- DO NOT MODIFY THIS FILE DIRECTLY -->" > readme.md
+	echo "<!-- instead modify readme.tmpl.md and run \`make readme.md\` -->" >> readme.md
+	echo >> readme.md
+
+	sed \
+		-e '/^$(README_EATER_BOOKMARKLET_PLACEHOLDER)$$/ r bookmarklet-eater.js' \
+		-e '/^$(README_EATER_BOOKMARKLET_PLACEHOLDER)$$/ d' \
+		readme.tmpl.md \
+		>> readme.md
