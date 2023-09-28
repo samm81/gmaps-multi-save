@@ -15,7 +15,7 @@ populating these lists used to be a terribly manual ordeal. not anymore 😎
 
 1. save the bookmark
 
-![setup video](assets/setup.mp4)
+https://raw.githubusercontent.com/samm81/gmaps-multi-save/main/assets/setup.mp4
 
 ### usage
 
@@ -31,7 +31,7 @@ populating these lists used to be a terribly manual ordeal. not anymore 😎
 1. paste into console
 1. hit enter and watch it run!
 
-![usage video](assets/usage.mp4)
+https://raw.githubusercontent.com/samm81/gmaps-multi-save/main/assets/usage.mp4
 
 ### notes
 
