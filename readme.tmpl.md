@@ -9,9 +9,9 @@ populating these lists used to be a terribly manual ordeal. not anymore 😎
 1. create a new bookmark
 1. copy/paste the following code into the URL field
 
-```javascript
-javascript: alert("eater-gmaps bookmarklet placeholder");
-```
+   ```javascript
+   javascript: alert("eater-gmaps bookmarklet placeholder");
+   ```
 
 1. save the bookmark
 
@@ -31,9 +31,13 @@ javascript: alert("eater-gmaps bookmarklet placeholder");
 
 ### notes
 
-high likelihood of bugs and weird behavior. this relies on css selectors, which would break every time google deploys new UI for lists. I also find that for longer lists, it tends to get stuck towards the end of the list since when it navigates to a new restaurant it's not doing a full reload (only a partial one) and (I think) all the assets it loaded for the previous restaurants stick around too and eventually overload something which causes the script to get stuck. you can try to refresh and re-paste (the script is smart enough to skip already saved places) but what I usually do is paste it into a text editor and delete all the entries it already added so as to speed it up.
+- 🐞 high likelihood of bugs
+  - 🧑‍💻 relies on css selectors, so will break every time google deploys new UI for lists
+  - 📜 on longer lists tends to fail and get stuck towards the end of the list
+    - 🤔 (I suspect this is because when it navigates to a new restaurant it's not doing a full reload (only a partial one) and all previously loaded assets stick around and eventually overload something which causes the script to get stuck)
+    - ♻️ can refresh and re-paste (the script is smart enough to skip already saved places) but what I usually do is first paste it into a text editor and delete all the entries it already added
 
-please submit any bugs here on github.
+🙏 please submit bugs to github repo
 
 ### roadmap
 
