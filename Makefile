@@ -52,12 +52,21 @@ bookmarklet-eater.js: node_modules gmaps-add.js from-eater.js
 	rm -rf build/
 
 readme.md: bookmarklet-eater.js readme.tmpl.md
-	echo "<!-- DO NOT MODIFY THIS FILE DIRECTLY -->" > readme.md
-	echo "<!-- instead modify readme.tmpl.md and run \`make readme.md\` -->" >> readme.md
-	echo >> readme.md
+	mkdir build/
+
+	echo -n "   " > build/bookmarklet-eater-padded.js
+	cat bookmarklet-eater.js >> build/bookmarklet-eater-padded.js
+
+	echo "<!-- DO NOT MODIFY THIS FILE DIRECTLY -->" > build/readme.md
+	echo "<!-- instead modify readme.tmpl.md and run \`make readme.md\` -->" >> build/readme.md
+	echo >> build/readme.md
 
 	sed \
-		-e '/$(README_EATER_BOOKMARKLET_PLACEHOLDER)/ r bookmarklet-eater.js' \
+		-e '/$(README_EATER_BOOKMARKLET_PLACEHOLDER)/ r build/bookmarklet-eater-padded.js' \
 		-e '/$(README_EATER_BOOKMARKLET_PLACEHOLDER)/ d' \
 		readme.tmpl.md \
-		>> readme.md
+		>> build/readme.md
+
+	mv build/readme.md readme.md
+
+	rm -rf build/
