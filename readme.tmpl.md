@@ -15,6 +15,8 @@ populating these lists used to be a terribly manual ordeal. not anymore 😎
 
 1. save the bookmark
 
+![setup video](assets/setup.mp4)
+
 ### usage
 
 1. open up google maps
@@ -28,6 +30,8 @@ populating these lists used to be a terribly manual ordeal. not anymore 😎
 1. open up the console (ctrl+shift+i usually)
 1. paste into console
 1. hit enter and watch it run!
+
+![usage video](assets/usage.mp4)
 
 ### notes
 

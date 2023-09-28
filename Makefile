@@ -57,7 +57,7 @@ readme.md: bookmarklet-eater.js readme.tmpl.md
 	echo >> readme.md
 
 	sed \
-		-e '/^$(README_EATER_BOOKMARKLET_PLACEHOLDER)$$/ r bookmarklet-eater.js' \
-		-e '/^$(README_EATER_BOOKMARKLET_PLACEHOLDER)$$/ d' \
+		-e '/$(README_EATER_BOOKMARKLET_PLACEHOLDER)/ r bookmarklet-eater.js' \
+		-e '/$(README_EATER_BOOKMARKLET_PLACEHOLDER)/ d' \
 		readme.tmpl.md \
 		>> readme.md
