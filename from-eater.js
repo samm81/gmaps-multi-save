@@ -76,7 +76,12 @@ function genScript(cardData, listName, eaterListTitle, updated) {
   const addUrlToListsStr = cardData
     .map((cardDatum, index) => {
       const note = noteForDatum(cardDatum, eaterListTitle, updated);
-      const url = cardDatum.gmaps;
+      const urlRaw = cardDatum.gmaps;
+      const url = (() => {
+        if (urlRaw.includes("?api=1")) return urlRaw;
+        const [latLong] = urlRaw.split("/").slice(-1);
+        return `https://www.google.com/maps/search/${cardDatum.name}/@${latLong}`;
+      })();
       return `.then(() => addUrlToList("${
         cardDatum.name
       }", "${url}", "${listName}", '${escapeSingleQuotes(note)}', "[${
