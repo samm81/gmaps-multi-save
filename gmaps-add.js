@@ -1,4 +1,4 @@
-const btnSaveSelector = '[jsaction*="pane.placeActions.save"]';
+const btnSaveSelector = '[data-value*="Save"]';
 
 let logPrefix = "";
 
@@ -115,11 +115,14 @@ function addUrlToList(name, url, listName, note, loggingNote) {
         .then(() =>
           observeUntilFound(document.querySelector("#modal-dialog"), [
             "#modal-dialog textarea",
-            '[data-id="confirm"]',
           ])
         )
         .then(rest)
-        .then(([textarea, btnConfirm]) => {
+        .then(([textarea]) => {
+          const btns = document.querySelectorAll("#modal-dialog button");
+          const btnConfirm = Array.from(btns).find(
+            (btn) => btn.innerText === "DONE"
+          );
           textarea.value = note;
           btnConfirm.click();
         })
