@@ -1,8 +1,4 @@
-function preamble() {
-  return `
-placeholder for content of bookmarklet-eater-gmaps-save-to-list-helper.js
-`;
-}
+// terser concats `make-gmaps-paste-snippet` which contains `genScript`
 
 function processCard(card) {
   console.log(`card ${card}`);
@@ -67,30 +63,18 @@ function noteForDatum(cardDatum, eaterListTitle, updated) {
   return `Eater - ${eaterListTitle} (updated ${updated})\\n\\n${cardDatum.description}`;
 }
 
-function escapeSingleQuotes(str) {
-  return str.replace(/'/g, "\\'");
-}
-
-function genScript(cardData, listName, eaterListTitle, updated) {
+function cardDataToMapsData(cardData, eaterListTitle, updated) {
   const cardDataCount = cardData.length;
-  const addUrlToListsStr = cardData
-    .map((cardDatum, index) => {
-      const note = noteForDatum(cardDatum, eaterListTitle, updated);
-      const urlRaw = cardDatum.gmaps;
-      const url = (() => {
-        if (urlRaw.includes("?api=1")) return urlRaw;
-        const [latLong] = urlRaw.split("/").slice(-1);
-        return `https://www.google.com/maps/search/${cardDatum.name}/@${latLong}`;
-      })();
-      return `.then(() => addUrlToList("${
-        cardDatum.name
-      }", "${url}", "${listName}", '${escapeSingleQuotes(note)}', "[${
-        index + 1
-      } / ${cardDataCount}]"))`;
-    })
-    .join("\n");
-
-  return `${preamble()}\n(() => Promise.resolve())()\n${addUrlToListsStr};`;
+  return cardData.map((cardDatum) => {
+    const note = noteForDatum(cardDatum, eaterListTitle, updated);
+    const urlRaw = cardDatum.gmaps;
+    const url = (() => {
+      if (urlRaw.includes("?api=1")) return urlRaw;
+      const [latLong] = urlRaw.split("/").slice(-1);
+      return `https://www.google.com/maps/search/${cardDatum.name}/@${latLong}`;
+    })();
+    return { name: cardDatum.name, url, note };
+  });
 }
 
 function bookmarklet() {
@@ -99,7 +83,8 @@ function bookmarklet() {
   );
 
   const [eaterListTitle, updated, cardData] = scrapeFromPage();
-  const script = genScript(cardData, listName, eaterListTitle, updated);
+  const mapsData = cardDataToMapsData(cardData, eaterListTitle, updated);
+  const script = genScript(mapsData, listName);
   navigator.clipboard.writeText(script);
 
   alert("script copied to clipboard!");
