@@ -4,6 +4,10 @@ google maps saved lists are great. before I travel anywhere I fill up my lists w
 
 populating these lists used to be a terribly manual ordeal. not anymore 😎
 
+# sources
+
+## eater
+
 ### setup
 
 1. create a new bookmark
@@ -32,6 +36,24 @@ https://github.com/samm81/gmaps-multi-save/assets/1221372/4176953e-256a-4dc8-aa5
 1. hit enter and watch it run!
 
 https://github.com/samm81/gmaps-multi-save/assets/1221372/8ce649e8-b218-448b-aeef-77f05ff8d563
+
+## michelin
+
+### usage
+
+1. clone the repo
+1. `make`
+1. `make data/michelin.csv`
+1. `node michelin-to-csv.mjs -i './data/michelin.csv' --loc "${LOCATION}" -o "michelin-${LOCATION}.csv`
+1. `node csv-to-gmaps-paste-snippet.mjs "michelin-${LOCATION}.csv" > snip.js`
+1. ensure you have four lists in google maps
+   1. michelin-😋
+   1. michelin-⭐
+   1. michelin-⭐⭐
+   1. michelin-⭐⭐⭐
+1. copy/paste contents of `snip.js` into google maps console
+
+# appendix
 
 ### notes
 

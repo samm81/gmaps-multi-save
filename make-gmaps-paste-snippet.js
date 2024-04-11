@@ -8,10 +8,10 @@ function escapeSingleQuotes(str) {
   return str.replace(/'/g, "\\'");
 }
 
-function genScript(data, listName) {
+function genScript(data) {
   const dataCount = data.length;
   const addUrlToListsStr = data
-    .map(({ name, url, note }, index) => {
+    .map(({ name, url, note, listName }, index) => {
       const loggingNote = `[${index + 1} / ${dataCount}]`;
       const noteSafe = escapeSingleQuotes(note);
       return `.then(() => addUrlToList("${name}", "${url}", "${listName}", '${noteSafe}', "${loggingNote}"))`;

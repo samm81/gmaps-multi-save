@@ -63,7 +63,7 @@ function noteForDatum(cardDatum, eaterListTitle, updated) {
   return `Eater - ${eaterListTitle} (updated ${updated})\\n\\n${cardDatum.description}`;
 }
 
-function cardDataToMapsData(cardData, eaterListTitle, updated) {
+function cardDataToMapsData(cardData, eaterListTitle, updated, listName) {
   const cardDataCount = cardData.length;
   return cardData.map((cardDatum) => {
     const note = noteForDatum(cardDatum, eaterListTitle, updated);
@@ -73,7 +73,7 @@ function cardDataToMapsData(cardData, eaterListTitle, updated) {
       const [latLong] = urlRaw.split("/").slice(-1);
       return `https://www.google.com/maps/search/${cardDatum.name}/@${latLong}`;
     })();
-    return { name: cardDatum.name, url, note };
+    return { name: cardDatum.name, url, note, listName };
   });
 }
 
@@ -83,8 +83,13 @@ function bookmarklet() {
   );
 
   const [eaterListTitle, updated, cardData] = scrapeFromPage();
-  const mapsData = cardDataToMapsData(cardData, eaterListTitle, updated);
-  const script = genScript(mapsData, listName);
+  const mapsData = cardDataToMapsData(
+    cardData,
+    eaterListTitle,
+    updated,
+    listName
+  );
+  const script = genScript(mapsData);
   navigator.clipboard.writeText(script);
 
   alert("script copied to clipboard!");
