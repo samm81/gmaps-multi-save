@@ -63,6 +63,14 @@ https://github.com/samm81/gmaps-multi-save/assets/1221372/8ce649e8-b218-448b-aee
    1. michelin-⭐⭐⭐
 1. copy/paste contents of `snip.js` into google maps console
 
+### reverse import
+
+I often find it useful to reverse the order of the generated michelin list, as it goes from highest rated (⭐⭐⭐) to lowest (😋), but I'd rather import the bib-gourmand entries first. here's an example of how to do that:
+
+```bash
+node csv-to-gmaps-paste-snippet.mjs <(cat <(head -n 1 taipei-michelin.csv) <(tail -n +2 taipei-michelin.csv | tac)) > taipei-michelin.js
+```
+
 # appendix
 
 ### notes
