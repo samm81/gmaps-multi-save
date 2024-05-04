@@ -22,7 +22,7 @@ clean:
 	rm -rf build/
 .PHONY: clean
 
-build/gmaps-add.min.js:
+build/gmaps-add.min.js: gmaps-add.js
 	mkdir -p build/
 
 	$(TERSER) \
