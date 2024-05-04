@@ -1,3 +1,9 @@
+# ⚠️⚠️ CURRENTLY BROKEN ⚠️⚠️
+
+as of my most recent testing 2024-05-04 it seems that google has changed their `csp` to include a `script-src` with a `nonce` - meaning that the in-page navigation (done with `document.write(fetch(new_url))`) now fails (since the newly fetched scripts are not a part of the `nonce`) ☹️ which makes this approach dead in the water
+
+other options possibly include more traditional browser automation techniques (headless) or reverse engineering the saved lists api.
+
 # gmaps-multi-save
 
 google maps saved lists are great. before I travel anywhere I fill up my lists with possible places to eat, drink, shop, and tour. I populate from sites like eater, michelin guide, timeout, and lonely planet.
@@ -52,6 +58,26 @@ https://github.com/samm81/gmaps-multi-save/assets/1221372/8ce649e8-b218-448b-aee
    1. michelin-⭐⭐
    1. michelin-⭐⭐⭐
 1. copy/paste contents of `snip.js` into google maps console
+
+### reverse import
+
+I often find it useful to reverse the order of the generated michelin list, as it goes from highest rated (⭐⭐⭐) to lowest (😋), but I'd rather import the bib-gourmand entries first. here's an example of how to do that:
+
+```bash
+node csv-to-gmaps-paste-snippet.mjs <(cat <(head -n 1 taipei-michelin.csv) <(tail -n +2 taipei-michelin.csv | tac)) > taipei-michelin.js
+```
+
+## generic
+
+if you have another data source, you can create a csv file with just two columns, `name` and `note`. then run the `generic-to-csv` script, providing a set of coordinates around which to center the text searches, and the name of the list to add to. for example, if you've got a file with a list of unesco heritage sites for kyoto, and you know kyoto's coordinates are `35.0081133,135.7615855`, then you'd run:
+
+```bash
+node generic-to-csv.mjs \
+    -i ./data/unesco-kyoto.csv \
+    -o kyoto-unesco.csv \
+    --coords '35.0081133,135.7615855' \
+    --listname 'unseco'
+```
 
 # appendix
 
