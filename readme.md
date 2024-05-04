@@ -71,6 +71,18 @@ I often find it useful to reverse the order of the generated michelin list, as i
 node csv-to-gmaps-paste-snippet.mjs <(cat <(head -n 1 taipei-michelin.csv) <(tail -n +2 taipei-michelin.csv | tac)) > taipei-michelin.js
 ```
 
+## generic
+
+if you have another data source, you can create a csv file with just two columns, `name` and `note`. then run the `generic-to-csv` script, providing a set of coordinates around which to center the text searches, and the name of the list to add to. for example, if you've got a file with a list of unesco heritage sites for kyoto, and you know kyoto's coordinates are `35.0081133,135.7615855`, then you'd run:
+
+```bash
+node generic-to-csv.mjs \
+    -i ./data/unesco-kyoto.csv \
+    -o kyoto-unesco.csv \
+    --coords '35.0081133,135.7615855' \
+    --listname 'unseco'
+```
+
 # appendix
 
 ### notes
