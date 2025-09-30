@@ -15,6 +15,32 @@ function rest(val) {
 }
 
 function goToUrl(url) {
+  _goToUrl_search(url);
+}
+
+function _goToUrl_search(url) {
+  const [latLon, name] = url.replace(/\/$/, "").split("/").reverse();
+  const [lat, lon] = latLon.replace(/^@/, "").split(",");
+  search(`${lat},${lon}`);
+  return new Promise((resolve) =>
+    setTimeout(() => {
+      search(name);
+      setTimeout(() => resolve(), 500);
+    }, 3000)
+  );
+}
+
+function search(searchText) {
+  const searchBox = document.querySelector("#searchboxinput");
+  const searchButton = document.querySelector("#searchbox-searchbutton");
+  if (!searchBox || !searchButton) {
+    throw "search box or search button not found";
+  }
+  searchBox.value = searchText;
+  searchButton.click();
+}
+
+function _goToUrl_direct(url) {
   log(`goToUrl ${url}`);
 
   return new Promise((resolve) =>
