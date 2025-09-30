@@ -1,6 +1,6 @@
 function preamble() {
   return `
-placeholder for content of bookmarklet-eater-gmaps-save-to-list-helper.js
+placeholder for content of gmaps-add.js
 `;
 }
 
