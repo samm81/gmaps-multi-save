@@ -4,3 +4,5 @@ node_modules
 build/
 data/
 csv-to-gmaps-paste-snippet.mjs
+.playwright/
+output/playwright/

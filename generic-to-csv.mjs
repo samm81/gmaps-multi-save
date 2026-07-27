@@ -7,7 +7,7 @@ import getopts from "getopts";
 const gmapsSearchUrl = "https://www.google.com/maps/search";
 
 function makeGmapsSearchUrl(name, coords) {
-  return `${gmapsSearchUrl}/${name}/@${coords}`;
+  return `${gmapsSearchUrl}/${encodeURIComponent(name)}/@${coords}`;
 }
 
 function main() {

@@ -4,6 +4,8 @@
   "description": "import from popular travel websites to google maps lists",
   "main": "bookmarklet-eater-gmaps-save-to-list-helper.js",
   "scripts": {
+    "gmaps:login": "node tools/gmaps-login.mjs",
+    "gmaps:save-list": "node tools/gmaps-save-list.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -28,5 +30,8 @@
     "getopts": "^2.3.0",
     "stream-transform": "^3.3.1",
     "terser": "^5.20.0"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.61.1"
   }
 }

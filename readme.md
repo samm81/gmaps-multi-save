@@ -1,17 +1,37 @@
 <!-- DO NOT MODIFY THIS FILE DIRECTLY -->
 <!-- instead modify readme.tmpl.md and run `make readme.md` -->
 
-# ⚠️⚠️ CURRENTLY BROKEN ⚠️⚠️
+# ⚠️⚠️ BOOKMARKLET CURRENTLY BROKEN ⚠️⚠️
 
-as of my most recent testing 2024-05-04 it seems that google has changed their `csp` to include a `script-src` with a `nonce` - meaning that the in-page navigation (done with `document.write(fetch(new_url))`) now fails (since the newly fetched scripts are not a part of the `nonce`) ☹️ which makes this approach dead in the water
+as of my most recent testing 2024-05-04 it seems that google has changed their `csp` to include a `script-src` with a `nonce` - meaning that the in-page navigation (done with `document.write(fetch(new_url))`) now fails (since the newly fetched scripts are not a part of the `nonce`) ☹️ which makes the bookmarklet/console approach dead in the water
 
-other options possibly include more traditional browser automation techniques (headless) or reverse engineering the saved lists api.
+the preferred path is now the Playwright runner, which drives a normal headed browser with a local persistent profile.
 
 # gmaps-multi-save
 
 google maps saved lists are great. before I travel anywhere I fill up my lists with possible places to eat, drink, shop, and tour. I populate from sites like eater, michelin guide, timeout, and lonely planet.
 
 populating these lists used to be a terribly manual ordeal. not anymore 😎
+
+# playwright saved-list import
+
+this path avoids in-page script injection and uses the same csv shape as the old paste-snippet workflow: `name,url,note,listName`.
+
+first, create the dedicated local browser profile and sign in manually. the login command opens the installed browser directly because google may reject automated sign-in:
+
+```bash
+npm run gmaps:login
+```
+
+close that browser after signing in, then press enter in the terminal. the profile lives under `.playwright/google-profile` and is ignored by git.
+
+then generate a csv using one of the source converters and run:
+
+```bash
+npm run gmaps:save-list -- places.csv --limit 20 --delay-ms 2500
+```
+
+the runner stores the browser profile and checkpoints under `.playwright/`, which is ignored by git. keep google maps open in the launched browser, stop if google shows an account challenge, and rerun the same command to resume after already-completed rows.
 
 # sources
 
@@ -52,14 +72,14 @@ https://github.com/samm81/gmaps-multi-save/assets/1221372/8ce649e8-b218-448b-aee
 1. clone the repo
 1. `make`
 1. `make data/michelin.csv`
-1. `node michelin-to-csv.mjs -i './data/michelin.csv' --loc "${LOCATION}" -o "michelin-${LOCATION}.csv`
-1. `node csv-to-gmaps-paste-snippet.mjs "michelin-${LOCATION}.csv" > snip.js`
+1. `node michelin-to-csv.mjs -i './data/michelin.csv' --loc "${LOCATION}" -o "michelin-${LOCATION}.csv"`
 1. ensure you have four lists in google maps
    1. michelin-😋
    1. michelin-⭐
    1. michelin-⭐⭐
    1. michelin-⭐⭐⭐
-1. copy/paste contents of `snip.js` into google maps console
+1. `npm run gmaps:login`
+1. `npm run gmaps:save-list -- "michelin-${LOCATION}.csv" --limit 20`
 
 ### reverse import
 
@@ -86,10 +106,8 @@ node generic-to-csv.mjs \
 ### notes
 
 - 🐞 high likelihood of bugs
-  - 🧑‍💻 relies on css selectors, so will break every time google deploys new UI for lists
-  - 📜 on longer lists tends to fail and get stuck towards the end of the list
-    - 🤔 (I suspect this is because when it navigates to a new restaurant it's not doing a full reload (only a partial one) and all previously loaded assets stick around and eventually overload something which causes the script to get stuck)
-    - ♻️ can refresh and re-paste (the script is smart enough to skip already saved places) but what I usually do is first paste it into a text editor and delete all the entries it already added
+  - 🧑‍💻 the Playwright runner still relies on google maps UI labels/selectors, so it can break when google changes saved-list controls
+  - 📜 use small batches with `--limit` and rerun after failures; completed rows are tracked in `.playwright/gmaps-save-checkpoint.json`
 
 🙏 please submit bugs to github repo
 
