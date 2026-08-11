@@ -393,11 +393,13 @@ async function verifyPlaceLocation(page, row, maxDistanceM) {
   if (actual) {
     const distanceM = distanceInMeters(expected, actual);
     if (distanceM > maxDistanceM) {
-      throw new Error(
+      const error = new Error(
         `location mismatch for ${row.name}: Google Maps resolved ${actual.latitude},${actual.longitude}, ` +
           `which is ${Math.round(distanceM)}m from source ${expected.latitude},${expected.longitude} ` +
           `(limit ${maxDistanceM}m)`
       );
+      error.code = "LOCATION_UNVERIFIED";
+      throw error;
     }
 
     console.log(
@@ -408,15 +410,19 @@ async function verifyPlaceLocation(page, row, maxDistanceM) {
 
   const placeAddress = await findPlaceAddress(page);
   if (!placeAddress) {
-    throw new Error(
+    const error = new Error(
       `could not verify ${row.name}: Google Maps did not expose a place address (current URL: ${page.url()})`
     );
+    error.code = "LOCATION_UNVERIFIED";
+    throw error;
   }
   if (!row.address || !addressesMatch(row.address, placeAddress)) {
-    throw new Error(
+    const error = new Error(
       `address mismatch for ${row.name}: Google Maps shows ${JSON.stringify(placeAddress)}, ` +
         `source address is ${JSON.stringify(row.address)}`
     );
+    error.code = "LOCATION_UNVERIFIED";
+    throw error;
   }
 
   console.log(`verified ${row.name}: matched place address`);
@@ -442,7 +448,9 @@ async function findSaveButtonForSearch(page, row, searchUrl, candidates) {
   } catch (error) {
     const result = await findSearchResult(page, row.name);
     if (!result) {
-      if (sourceCoordinates(row)) throw unresolvedPlaceError(row.name, error);
+      if (sourceCoordinates(row) || row.address?.trim()) {
+        throw unresolvedPlaceError(row.name, error);
+      }
       throw error;
     }
 
@@ -451,7 +459,7 @@ async function findSaveButtonForSearch(page, row, searchUrl, candidates) {
     try {
       return await findFirstVisible(page, candidates, "Save button after selecting result");
     } catch (afterSelectingError) {
-      if (sourceCoordinates(row)) {
+      if (sourceCoordinates(row) || row.address?.trim()) {
         throw unresolvedPlaceError(row.name, afterSelectingError);
       }
       throw afterSelectingError;
@@ -487,10 +495,14 @@ async function savePlace(page, row, maxDistanceM) {
         searchUrl,
         saveButtonCandidates
       );
+      await verifyPlaceLocation(page, row, maxDistanceM);
       break;
     } catch (error) {
       lastError = error;
-      if (error.code !== "PLACE_UNRESOLVED" || index === searchUrls.length - 1) {
+      if (
+        !["PLACE_UNRESOLVED", "LOCATION_UNVERIFIED"].includes(error.code) ||
+        index === searchUrls.length - 1
+      ) {
         throw error;
       }
     }
@@ -498,7 +510,6 @@ async function savePlace(page, row, maxDistanceM) {
 
   if (!saveButton) throw lastError;
 
-  await verifyPlaceLocation(page, row, maxDistanceM);
   await saveButton.click({ timeout: 10000 });
 
   const listItem = await findListItem(page, row.listName);
