@@ -77,6 +77,13 @@ data/michelin.csv:
 		'https://raw.githubusercontent.com/ngshiheng/michelin-my-maps/main/data/michelin_my_maps.csv' \
 		> $@
 
+build/michelin-regional.csv: data/michelin.csv node_modules michelin-to-csv.mjs
+	mkdir -p build/
+	node michelin-to-csv.mjs \
+		-i data/michelin.csv \
+		--split-regions \
+		-o $@
+
 csv-to-gmaps-paste-snippet.mjs: node_modules csv-to-gmaps-paste-snippet.partial.mjs build/make-gmaps-paste-snippet-with-preamble.js
 	cat > $@ \
 		<(cat build/make-gmaps-paste-snippet-with-preamble.js) \
