@@ -10,6 +10,11 @@ import {
 
 const checkpointDefault = ".playwright/gmaps-save-checkpoint.json";
 const screenshotDir = "output/playwright";
+const googleListNameMaxLength = 40;
+
+function truncateListName(listName) {
+  return Array.from(listName).slice(0, googleListNameMaxLength).join("");
+}
 
 function usage() {
   return [
@@ -19,6 +24,7 @@ function usage() {
     "",
     "CSV columns: name,url,note,listName; optional source metadata: address,location,latitude,longitude",
     "Rows with source coordinates are verified before they are saved.",
+    "Google Maps list-name lookups use the first 40 characters.",
     "Rerunning the same command skips rows already attempted; use --retry-failed to retry failures.",
     "Run `npm run gmaps:login` first to create the local Google session.",
   ].join("\n");
@@ -148,7 +154,8 @@ async function clickOptional(candidates) {
 }
 
 async function findListItem(page, listName, timeoutMs = 15000) {
-  const escapedText = JSON.stringify(listName);
+  const visibleListName = truncateListName(listName);
+  const escapedText = JSON.stringify(visibleListName);
   const selectors = [
     `[role="menuitemradio"]:has-text(${escapedText})`,
     `[role="menuitemcheckbox"]:has-text(${escapedText})`,
@@ -175,9 +182,11 @@ function escapeRegExp(value) {
 async function addNoteIfPossible(page, listName, note) {
   if (!note) return;
 
+  const visibleListName = truncateListName(listName);
+
   const listGroup = page
     .getByRole("group", {
-      name: new RegExp(`^Saved in ${escapeRegExp(listName)}$`, "i"),
+      name: new RegExp(`^Saved in ${escapeRegExp(visibleListName)}$`, "i"),
     })
     .first();
   const textarea = listGroup
@@ -186,7 +195,7 @@ async function addNoteIfPossible(page, listName, note) {
 
   if (!(await textarea.isVisible().catch(() => false))) {
     const detailsText = new RegExp(
-      `Saved\\s+in\\s+${escapeRegExp(listName)}`,
+      `Saved\\s+in\\s+${escapeRegExp(visibleListName)}`,
       "i"
     );
     await clickOptional([
@@ -199,7 +208,9 @@ async function addNoteIfPossible(page, listName, note) {
   try {
     await textarea.waitFor({ state: "visible", timeout: 10000 });
   } catch (error) {
-    throw new Error(`could not find note field for ${listName}: ${error.message}`);
+    throw new Error(
+      `could not find note field for ${visibleListName}: ${error.message}`
+    );
   }
 
   await textarea.fill(note);
