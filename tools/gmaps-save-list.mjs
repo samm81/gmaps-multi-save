@@ -13,7 +13,7 @@ const screenshotDir = "output/playwright";
 const googleListNameMaxLength = 40;
 
 function truncateListName(listName) {
-  return Array.from(listName).slice(0, googleListNameMaxLength).join("");
+  return listName.slice(0, googleListNameMaxLength);
 }
 
 function usage() {
@@ -524,7 +524,11 @@ async function savePlace(page, row, maxDistanceM) {
   await saveButton.click({ timeout: 10000 });
 
   const listItem = await findListItem(page, row.listName);
-  if (!listItem) throw new Error(`could not find list ${row.listName}`);
+  if (!listItem) {
+    throw new Error(
+      `could not find list ${row.listName} (looked for ${truncateListName(row.listName)})`
+    );
+  }
 
   const checked = await listItem.getAttribute("aria-checked").catch(() => null);
   if (checked === "true") {
