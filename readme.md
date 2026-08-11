@@ -81,6 +81,35 @@ https://github.com/samm81/gmaps-multi-save/assets/1221372/8ce649e8-b218-448b-aee
 1. `npm run gmaps:login`
 1. `npm run gmaps:save-list -- "michelin-${LOCATION}.csv" --limit 20`
 
+### regional lists
+
+To generate smaller global lists, run:
+
+```bash
+make build/michelin-regional.csv
+```
+
+This splits the 1-star and Bib Gourmand entries into regional lists. The 2-star and 3-star lists remain global. Selected Restaurants entries are omitted. The regional list suffixes are `americas`, `france`, `western-europe`, `southern-europe`, `central-northern-eastern-europe`, `china-japan`, and `other-asia-pacific-middle-east-oceania`.
+
+The generated Michelin rows retain the source address and coordinates. Before saving a row, the Playwright runner checks that Google Maps resolved a place within 1,000 meters of the Michelin coordinates. When Google keeps the browser on a search URL, it checks the visible place address instead. If the initial search cannot find a place, it retries once with the Michelin address appended to the search term. Rows that do not pass are recorded as failures and are not saved. Adjust the coordinate tolerance with `--max-distance-m 500` (or another positive distance in meters).
+
+After creating those lists in Google Maps, run:
+
+```bash
+npm run gmaps:save-list -- 'build/michelin-regional.csv'
+```
+
+To import only one list, filter by its exact `listName` without changing the generated CSV:
+
+```bash
+npm run gmaps:save-list -- 'build/michelin-regional.csv' \
+    --list-name 'michelin-😋-france' \
+    --checkpoint '.playwright/michelin-bib-france.json' \
+    --continue-on-error
+```
+
+The checkpoint records completed rows and an attempt history with timestamps, source metadata, resolved Google URLs, errors, and failure screenshots under `output/playwright/`. By default, rerunning skips both completed rows and rows already present in the attempt history, including failures. Add `--retry-failed` to retry previous failures. Use `--dry-run` to inspect counts first, or omit `--continue-on-error` to stop after recording the first failure.
+
 ### reverse import
 
 I often find it useful to reverse the order of the generated michelin list, as it goes from highest rated (⭐⭐⭐) to lowest (😋), but I'd rather import the bib-gourmand entries first. here's an example of how to do that:
