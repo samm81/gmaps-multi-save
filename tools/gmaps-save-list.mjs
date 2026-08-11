@@ -206,7 +206,7 @@ async function addNoteIfPossible(page, listName, note) {
   }
 
   try {
-    await textarea.waitFor({ state: "visible", timeout: 10000 });
+    await textarea.waitFor({ state: "visible", timeout: 30000 });
   } catch (error) {
     throw new Error(
       `could not find note field for ${visibleListName}: ${error.message}`
