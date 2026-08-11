@@ -40,9 +40,27 @@ export async function launchMapsContext({ profileDir = defaultProfileDir } = {})
   return chromium.launchPersistentContext(profileDir, launchOptions);
 }
 
+function encodeMapsSearchPath(pathname) {
+  const match = pathname.match(/^\/maps\/search\/(.+)\/@([^/]+)$/);
+  if (!match) return pathname;
+
+  let searchQuery;
+  try {
+    searchQuery = decodeURIComponent(match[1]);
+  } catch {
+    searchQuery = match[1];
+  }
+
+  return `/maps/search/${encodeURIComponent(searchQuery)}/@${match[2]}`;
+}
+
 export function normalizeMapsUrl(url) {
-  if (url.startsWith("http://") || url.startsWith("https://")) return url;
-  if (url.startsWith("/")) return `https://www.google.com${url}`;
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    const parsedUrl = new URL(url);
+    parsedUrl.pathname = encodeMapsSearchPath(parsedUrl.pathname);
+    return parsedUrl.toString();
+  }
+  if (url.startsWith("/")) return normalizeMapsUrl(`https://www.google.com${url}`);
   return `https://www.google.com/maps/search/${encodeURIComponent(url)}`;
 }
 
