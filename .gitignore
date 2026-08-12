@@ -1,8 +1,8 @@
-bookmarklet-eater.js
+/archive/bookmarklet/bookmarklet-eater.js
 node_modules
 
 build/
 data/
-csv-to-gmaps-paste-snippet.mjs
+/archive/bookmarklet/csv-to-gmaps-paste-snippet.mjs
 .playwright/
 output/playwright/

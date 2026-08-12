@@ -1,8 +1,7 @@
 {
   "name": "gmaps-multi-save",
   "version": "0.0.1",
-  "description": "import from popular travel websites to google maps lists",
-  "main": "bookmarklet-eater-gmaps-save-to-list-helper.js",
+  "description": "Import place lists into Google Maps saved lists",
   "scripts": {
     "gmaps:login": "node tools/gmaps-login.mjs",
     "gmaps:save-list": "node tools/gmaps-save-list.mjs",
@@ -13,7 +12,7 @@
     "url": "git+https://github.com/samm81/gmaps-multi-save.git"
   },
   "keywords": [
-    "bookmarklet",
+    "playwright",
     "google",
     "maps",
     "lists"
@@ -28,8 +27,7 @@
     "csv-parse": "^5.5.5",
     "csv-stringify": "^6.4.6",
     "getopts": "^2.3.0",
-    "stream-transform": "^3.3.1",
-    "terser": "^5.20.0"
+    "stream-transform": "^3.3.1"
   },
   "devDependencies": {
     "playwright-core": "^1.61.1"

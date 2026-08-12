@@ -1,83 +1,49 @@
-# ⚠️⚠️ BOOKMARKLET CURRENTLY BROKEN ⚠️⚠️
-
-as of my most recent testing 2024-05-04 it seems that google has changed their `csp` to include a `script-src` with a `nonce` - meaning that the in-page navigation (done with `document.write(fetch(new_url))`) now fails (since the newly fetched scripts are not a part of the `nonce`) ☹️ which makes the bookmarklet/console approach dead in the water
-
-the preferred path is now the Playwright runner, which drives a normal headed browser with a local persistent profile.
-
 # gmaps-multi-save
 
-google maps saved lists are great. before I travel anywhere I fill up my lists with possible places to eat, drink, shop, and tour. I populate from sites like eater, michelin guide, timeout, and lonely planet.
+Tools for importing place lists into Google Maps saved lists.
 
-populating these lists used to be a terribly manual ordeal. not anymore 😎
+The active workflow uses a normal headed browser controlled by Playwright. The former browser-console and bookmarklet workflow is preserved under [`archive/bookmarklet/`](archive/bookmarklet/).
 
-# playwright saved-list import
+## Playwright saved-list import
 
-this path avoids in-page script injection and uses the same csv shape as the old paste-snippet workflow: `name,url,note,listName`.
+This workflow uses CSV files with the columns `name,url,note,listName` and optional source metadata: `address`, `location`, `latitude`, and `longitude`.
 
-first, create the dedicated local browser profile and sign in manually. the login command opens the installed browser directly because google may reject automated sign-in:
+First, create the dedicated local browser profile and sign in manually. The login command opens the installed browser directly because Google may reject automated sign-in:
 
 ```bash
 npm run gmaps:login
 ```
 
-close that browser after signing in, then press enter in the terminal. the profile lives under `.playwright/google-profile` and is ignored by git.
+Close that browser after signing in, then press Enter in the terminal. The profile lives under `.playwright/google-profile` and is ignored by Git.
 
-then generate a csv using one of the source converters and run:
+Then generate a CSV using one of the source converters and run:
 
 ```bash
 npm run gmaps:save-list -- places.csv --limit 20 --delay-ms 2500
 ```
 
-the runner stores the browser profile and checkpoints under `.playwright/`, which is ignored by git. keep google maps open in the launched browser, stop if google shows an account challenge, and rerun the same command to resume after already-completed rows.
+The runner stores the browser profile and checkpoints under `.playwright/`, which is ignored by Git. Keep Google Maps open in the launched browser, stop if Google shows an account challenge, and rerun the same command to resume after already-completed rows.
 
-# sources
+## sources
 
-## eater
+### michelin
 
-### setup
+To download the current Michelin source data:
 
-1. create a new bookmark
-1. copy/paste the following code into the URL field
+```bash
+make data/michelin.csv
+```
 
-   ```javascript
-   javascript: alert("eater-gmaps bookmarklet placeholder");
-   ```
+For a single location, generate a four-list CSV:
 
-1. save the bookmark
+```bash
+node michelin-to-csv.mjs \
+    -i data/michelin.csv \
+    --loc "${LOCATION}" \
+    -o "michelin-${LOCATION}.csv"
+```
 
-https://github.com/samm81/gmaps-multi-save/assets/1221372/4176953e-256a-4dc8-aa52-33bee90093ae
-
-### usage
-
-1. open up google maps
-1. from the sidebar, go to "Saved" -> "Lists"
-1. either "+ New list" or find the name of a list you already have that you want to use (like "Want to go")
-1. navigate to an eater list (for example, [the 38 best restaurants in new york city](https://ny.eater.com/maps/best-new-york-restaurants-38-map))
-1. click the bookmarklet you created in [setup]
-1. enter the name of the google maps list you picked
-1. a popup should appear saying "script copied to clipboard!"
-1. go back to google maps
-1. open up the console (ctrl+shift+i usually)
-1. paste into console
-1. hit enter and watch it run!
-
-https://github.com/samm81/gmaps-multi-save/assets/1221372/8ce649e8-b218-448b-aeef-77f05ff8d563
-
-## michelin
-
-### usage
-
-1. clone the repo
-1. `make`
-1. `make data/michelin.csv`
-1. `node michelin-to-csv.mjs -i './data/michelin.csv' --loc "${LOCATION}" -o "michelin-${LOCATION}.csv"`
-1. ensure you have four lists in google maps
-   1. michelin-😋
-   1. michelin-⭐
-   1. michelin-⭐⭐
-   1. michelin-⭐⭐⭐
-1. `npm run gmaps:login`
-1. `npm run gmaps:save-list -- "michelin-${LOCATION}.csv" --limit 20`
+The four global list names are `michelin-😋`, `michelin-⭐`, `michelin-⭐⭐`, and `michelin-⭐⭐⭐`.
 
 ### regional lists
 
@@ -114,44 +80,23 @@ The checkpoint records completed rows and an attempt history with timestamps, so
 
 A failed attempt can be left half done: Google Maps may add the place to the list before the note field appears or the note is saved. When rerunning errors, an already-saved place may therefore still need its text note added; the runner checks the list state and retries note entry. The runner waits up to 60 seconds for the note field by default; change this with `--note-timeout-ms 120000`.
 
-### reverse import
+### migration reminder
 
-I often find it useful to reverse the order of the generated michelin list, as it goes from highest rated (⭐⭐⭐) to lowest (😋), but I'd rather import the bib-gourmand entries first. here's an example of how to do that:
+The current manual Michelin list migration is documented in [`michelin-regional-migration.md`](michelin-regional-migration.md).
 
-```bash
-node csv-to-gmaps-paste-snippet.mjs <(cat <(head -n 1 taipei-michelin.csv) <(tail -n +2 taipei-michelin.csv | tac)) > taipei-michelin.js
-```
+### generic
 
-## generic
-
-if you have another data source, you can create a csv file with just two columns, `name` and `note`. then run the `generic-to-csv` script, providing a set of coordinates around which to center the text searches, and the name of the list to add to. for example, if you've got a file with a list of unesco heritage sites for kyoto, and you know kyoto's coordinates are `35.0081133,135.7615855`, then you'd run:
+If you have another data source, create a CSV file with two columns, `name` and `note`. Then run `generic-to-csv`, providing coordinates around which to center the text searches and the name of the list to add to. For example:
 
 ```bash
 node generic-to-csv.mjs \
     -i ./data/unesco-kyoto.csv \
     -o kyoto-unesco.csv \
     --coords '35.0081133,135.7615855' \
-    --listname 'unseco'
+    --listname 'unesco'
 ```
 
-# appendix
+## notes
 
-### notes
-
-- 🐞 high likelihood of bugs
-  - 🧑‍💻 the Playwright runner still relies on google maps UI labels/selectors, so it can break when google changes saved-list controls
-  - 📜 use small batches with `--limit` and rerun after failures; completed rows are tracked in `.playwright/gmaps-save-checkpoint.json`
-
-🙏 please submit bugs to github repo
-
-### roadmap
-
-1. add other sources
-   1. michelin guide
-   1. timeout
-   1. lonely planet
-   1. atlas obscura
-   1. suggest one!
-1. since we're already using `terser` we could use a proper build system and refactor to modules 🤷
-1. we could also switch to typescript 🤷
-1. (very ambitious) identify when stuck, or when css selector has changed, and allow user to hotfix it during execution (by clicking on an item ?)
+- The Playwright runner relies on Google Maps UI labels and selectors, so it can break when Google changes saved-list controls.
+- Use small batches with `--limit` and rerun after failures; completed rows are tracked in `.playwright/gmaps-save-checkpoint.json`.

@@ -1,6 +1,6 @@
 # gmaps-multi-save
 
-Browser-console and bookmarklet helpers for importing place lists into Google Maps saved lists.
+Playwright and CSV helpers for importing place lists into Google Maps saved lists.
 
 ## AGENTS.md
 
@@ -24,9 +24,10 @@ Browser-console and bookmarklet helpers for importing place lists into Google Ma
 
 ## Commands
 
-- `make` - Build the bookmarklet, generated README, and CSV-to-Google-Maps paste snippet.
-- `make readme.md` - Regenerate `readme.md` from `readme.tmpl.md` and the current bookmarklet.
+- `make` - Regenerate the README.
+- `make readme.md` - Regenerate `readme.md` from `readme.tmpl.md`.
 - `make data/michelin.csv` - Download the Michelin source CSV into `data/`.
+- `make build/michelin-regional.csv` - Generate the regional Michelin import CSV.
 - `make clean` - Remove generated artifacts.
 
 ## Rules
@@ -39,4 +40,3 @@ After making changes:
 
 - `make` - Verify generated artifacts can be rebuilt.
 - Run the changed converter script against a small CSV fixture when editing `*.mjs` converters.
-- Manually test the generated snippet in Google Maps when editing `gmaps-add.js` or browser selectors.
