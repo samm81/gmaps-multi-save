@@ -89,7 +89,7 @@ To generate smaller global lists, run:
 make build/michelin-regional.csv
 ```
 
-This splits the 1-star and Bib Gourmand entries into regional lists. Mainland China has its own list. The East Asia lists contain Japan, Taiwan, Hong Kong, South Korea, and Macau; the other Asia lists contain the remaining Asia-Pacific, Middle East, and Oceania locations. The 2-star and 3-star lists remain global. Selected Restaurants entries are omitted. The regional list suffixes are `americas`, `france`, `western-europe`, `southern-europe`, `central-northern-eastern-europe`, `china`, `east-asia`, and `other-asia`.
+This splits the 1-star and Bib Gourmand entries into regional lists. Mainland China has its own list. The East Asia lists contain Japan, Taiwan, Hong Kong, South Korea, and Macau; the other Asia lists contain the remaining Asia-Pacific, Middle East, and Oceania locations. The 2-star and 3-star lists remain global. Selected Restaurants entries are omitted. The regional list suffixes are `americas`, `france`, `western-europe`, `southern-europe`, `central-northern-eastern-europe`, `china`, `east-asia`, and `other-asia-pacific-middle-east-oceania`. The long final suffix is retained for import checkpoint compatibility; Google Maps lookups use its first 40 characters.
 
 To omit Mainland China, generate `build/michelin-regional--no-china.csv`. To process that file from the end first, generate `build/michelin-regional--no-china--reversed.csv`; its Bib Gourmand rows come first.
 

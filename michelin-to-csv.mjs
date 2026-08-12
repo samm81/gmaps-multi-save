@@ -65,7 +65,7 @@ addRegion("east-asia", [
   "South Korea",
   "Macau",
 ]);
-addRegion("other-asia", [
+addRegion("other-asia-pacific-middle-east-oceania", [
   "Thailand",
   "THA",
   "Singapore",
