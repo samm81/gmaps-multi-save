@@ -11,6 +11,7 @@ import {
 const checkpointDefault = ".playwright/gmaps-save-checkpoint.json";
 const screenshotDir = "output/playwright";
 const googleListNameMaxLength = 40;
+const noteTimeoutMsDefault = 60000;
 
 function truncateListName(listName) {
   return listName.slice(0, googleListNameMaxLength);
@@ -20,7 +21,8 @@ function usage() {
   return [
     "usage: npm run gmaps:save-list -- places.csv [--list-name name] [--limit 20]",
     "       [--checkpoint path] [--continue-on-error] [--delay-ms 2500]",
-    "       [--max-distance-m 1000] [--retry-failed] [--dry-run]",
+    "       [--max-distance-m 1000] [--note-timeout-ms 60000]",
+    "       [--retry-failed] [--dry-run]",
     "",
     "CSV columns: name,url,note,listName; optional source metadata: address,location,latitude,longitude",
     "Rows with source coordinates are verified before they are saved.",
@@ -179,7 +181,7 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function addNoteIfPossible(page, listName, note) {
+async function addNoteIfPossible(page, listName, note, noteTimeoutMs) {
   if (!note) return;
 
   const visibleListName = truncateListName(listName);
@@ -206,7 +208,7 @@ async function addNoteIfPossible(page, listName, note) {
   }
 
   try {
-    await textarea.waitFor({ state: "visible", timeout: 30000 });
+    await textarea.waitFor({ state: "visible", timeout: noteTimeoutMs });
   } catch (error) {
     throw new Error(
       `could not find note field for ${visibleListName}: ${error.message}`
@@ -478,7 +480,7 @@ async function findSaveButtonForSearch(page, row, searchUrl, candidates) {
   }
 }
 
-async function savePlace(page, row, maxDistanceM) {
+async function savePlace(page, row, maxDistanceM, noteTimeoutMs) {
   const saveButtonCandidates = [
     () => page.locator('[data-value="Save"], [data-value="Saved"]'),
     () => page.locator('[aria-label="Save"], [aria-label="Saved"]'),
@@ -534,14 +536,14 @@ async function savePlace(page, row, maxDistanceM) {
   if (checked === "true") {
     console.log(`already saved: ${row.name} -> ${row.listName}`);
     await page.keyboard.press("Escape").catch(() => {});
-    await addNoteIfPossible(page, row.listName, row.note);
+    await addNoteIfPossible(page, row.listName, row.note, noteTimeoutMs);
     return;
   }
 
   await listItem.click({ timeout: 10000 });
   await page.waitForTimeout(1000);
   await page.keyboard.press("Escape").catch(() => {});
-  await addNoteIfPossible(page, row.listName, row.note);
+  await addNoteIfPossible(page, row.listName, row.note, noteTimeoutMs);
 }
 
 const options = getopts(process.argv.slice(2), {
@@ -553,6 +555,7 @@ const options = getopts(process.argv.slice(2), {
     listName: ["list-name", "list"],
     continueOnError: ["continue-on-error", "continue"],
     maxDistanceM: ["max-distance-m", "max-distance"],
+    noteTimeoutMs: ["note-timeout-ms", "note-timeout"],
     retryFailed: ["retry-failed", "retry-errors", "retry"],
     skipAttempted: ["skip-attempted", "skip-tried"],
   },
@@ -560,6 +563,7 @@ const options = getopts(process.argv.slice(2), {
     checkpoint: checkpointDefault,
     delayMs: 2500,
     maxDistanceM: 1000,
+    noteTimeoutMs: noteTimeoutMsDefault,
   },
 });
 
@@ -597,6 +601,10 @@ const delayMs = Number(options.delayMs);
 const maxDistanceM = Number(options.maxDistanceM);
 if (!Number.isFinite(maxDistanceM) || maxDistanceM <= 0) {
   throw new Error("--max-distance-m must be a positive number");
+}
+const noteTimeoutMs = Number(options.noteTimeoutMs);
+if (!Number.isFinite(noteTimeoutMs) || noteTimeoutMs <= 0) {
+  throw new Error("--note-timeout-ms must be a positive number");
 }
 const skipKeys = options.retryFailed
   ? completed
@@ -643,7 +651,7 @@ try {
     console.log(`[${attempted}] saving ${row.name} -> ${row.listName}`);
 
     try {
-      await savePlace(page, row, maxDistanceM);
+      await savePlace(page, row, maxDistanceM, noteTimeoutMs);
 
       const key = placeKey(row);
       completed.add(key);
@@ -653,6 +661,7 @@ try {
         finishedAt: new Date().toISOString(),
         googleUrl: page.url(),
         maxDistanceM,
+        noteTimeoutMs,
       });
       await writeCheckpoint(options.checkpoint, checkpoint);
       succeeded += 1;
@@ -665,6 +674,7 @@ try {
         screenshot: screenshotPath,
         googleUrl: page.url(),
         maxDistanceM,
+        noteTimeoutMs,
       });
       await writeCheckpoint(options.checkpoint, checkpoint);
       failed += 1;
