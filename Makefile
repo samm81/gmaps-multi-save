@@ -84,6 +84,13 @@ build/michelin-regional.csv: data/michelin.csv node_modules michelin-to-csv.mjs
 		--split-regions \
 		-o $@
 
+build/michelin-regional-reversed.csv: build/michelin-regional.csv node_modules tools/michelin-regional-transform.mjs
+	mkdir -p build/
+	node tools/michelin-regional-transform.mjs \
+		-i $< \
+		--reverse \
+		-o $@
+
 build/michelin-regional--no-china.csv: build/michelin-regional.csv node_modules tools/michelin-regional-transform.mjs
 	mkdir -p build/
 	node tools/michelin-regional-transform.mjs \
