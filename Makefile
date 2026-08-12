@@ -84,6 +84,20 @@ build/michelin-regional.csv: data/michelin.csv node_modules michelin-to-csv.mjs
 		--split-regions \
 		-o $@
 
+build/michelin-regional--no-china.csv: build/michelin-regional.csv node_modules tools/michelin-regional-transform.mjs
+	mkdir -p build/
+	node tools/michelin-regional-transform.mjs \
+		-i $< \
+		--exclude-china \
+		-o $@
+
+build/michelin-regional--no-china--reversed.csv: build/michelin-regional--no-china.csv node_modules tools/michelin-regional-transform.mjs
+	mkdir -p build/
+	node tools/michelin-regional-transform.mjs \
+		-i $< \
+		--reverse \
+		-o $@
+
 csv-to-gmaps-paste-snippet.mjs: node_modules csv-to-gmaps-paste-snippet.partial.mjs build/make-gmaps-paste-snippet-with-preamble.js
 	cat > $@ \
 		<(cat build/make-gmaps-paste-snippet-with-preamble.js) \
