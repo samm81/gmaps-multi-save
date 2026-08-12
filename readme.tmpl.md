@@ -87,7 +87,7 @@ To generate smaller global lists, run:
 make build/michelin-regional.csv
 ```
 
-This splits the 1-star and Bib Gourmand entries into regional lists. The 2-star and 3-star lists remain global. Selected Restaurants entries are omitted. The regional list suffixes are `americas`, `france`, `western-europe`, `southern-europe`, `central-northern-eastern-europe`, `china-japan`, and `other-asia-pacific-middle-east-oceania`.
+This splits the 1-star and Bib Gourmand entries into regional lists. Mainland China has its own list. The East Asia lists contain Japan, Taiwan, Hong Kong, South Korea, and Macau; the other Asia lists contain the remaining Asia-Pacific, Middle East, and Oceania locations. The 2-star and 3-star lists remain global. Selected Restaurants entries are omitted. The regional list suffixes are `americas`, `france`, `western-europe`, `southern-europe`, `central-northern-eastern-europe`, `china`, `east-asia`, and `other-asia`.
 
 The generated Michelin rows retain the source address and coordinates. Before saving a row, the Playwright runner checks that Google Maps resolved a place within 1,000 meters of the Michelin coordinates. When Google keeps the browser on a search URL, it checks the visible place address instead. If the initial search cannot find a place or fails location verification, it retries once with the Michelin address appended to the search term. Rows that do not pass either check are recorded as failures and are not saved. Adjust the coordinate tolerance with `--max-distance-m 500` (or another positive distance in meters).
 

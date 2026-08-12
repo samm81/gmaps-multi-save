@@ -57,12 +57,15 @@ addRegion("central-northern-eastern-europe", [
   "Iceland",
   "Liechtenstein",
 ]);
-addRegion("china-japan", ["Chinese Mainland", "Japan"]);
-addRegion("other-asia-pacific-middle-east-oceania", [
+addRegion("china", ["Chinese Mainland"]);
+addRegion("east-asia", [
+  "Japan",
   "Taiwan",
   "Hong Kong SAR China",
   "South Korea",
   "Macau",
+]);
+addRegion("other-asia", [
   "Thailand",
   "THA",
   "Singapore",
