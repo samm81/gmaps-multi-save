@@ -26,7 +26,9 @@ function usage() {
     "       [--retry-failed] [--dry-run]",
     "",
     "CSV columns: name,url,note,listName; optional source metadata: address,location,latitude,longitude",
-    "Rows with source coordinates are verified before they are saved.",
+    "Matching place results are selected and verified before they are saved.",
+    "The same place is verified again after Save opens the list picker.",
+    "Successful attempts record the verified place identity.",
     "Google Maps list-name lookups use the first 40 characters.",
     "Rerunning the same command skips rows already attempted; use --retry-failed to retry failures.",
     "Run `npm run gmaps:login` first to create the local Google session.",
@@ -281,22 +283,49 @@ async function addNoteIfPossible(page, listName, note, noteTimeoutMs) {
   await page.waitForTimeout(1000);
 }
 
-async function findSearchResult(page, name) {
+async function findSearchResult(page, name, timeoutMs = 15000) {
   const searchName = name.split(",", 1)[0].trim().toLocaleLowerCase();
-  const resultLinks = page.locator('a[href*="/maps/place/"]');
+  const deadline = Date.now() + timeoutMs;
 
-  for (let index = 0; index < (await resultLinks.count()); index += 1) {
-    const resultLink = resultLinks.nth(index);
-    const label = (await resultLink.getAttribute("aria-label")) ?? "";
-    const text = await resultLink.innerText().catch(() => "");
-    const resultText = `${label} ${text}`.toLocaleLowerCase();
-    if (resultText.includes(searchName)) return resultLink;
+  while (Date.now() < deadline) {
+    const resultLinks = page.locator('a[href*="/maps/place/"]');
+    for (let index = 0; index < (await resultLinks.count()); index += 1) {
+      const resultLink = resultLinks.nth(index);
+      if (!(await resultLink.isVisible().catch(() => false))) continue;
+      const label = (await resultLink.getAttribute("aria-label")) ?? "";
+      const text = await resultLink.innerText().catch(() => "");
+      const resultText = `${label} ${text}`.toLocaleLowerCase();
+      if (resultText.includes(searchName)) return resultLink;
+    }
+    await sleep(500);
   }
 
   return null;
 }
 
-async function findPlaceAddress(page) {
+async function findPlaceName(page, timeoutMs = 10000) {
+  const nameCandidates = [
+    () => page.locator("h1"),
+    () => page.locator('[data-item-id="title"]'),
+  ];
+
+  let nameLocator;
+  try {
+    nameLocator = await findFirstVisible(
+      page,
+      nameCandidates,
+      "place name",
+      timeoutMs
+    );
+  } catch {
+    return null;
+  }
+
+  const name = (await nameLocator.innerText().catch(() => "")).trim();
+  return name || null;
+}
+
+async function findPlaceAddress(page, timeoutMs = 5000) {
   const addressCandidates = [
     () => page.locator('[data-item-id="address"]'),
     () => page.locator('[aria-label^="Address:"]'),
@@ -308,7 +337,7 @@ async function findPlaceAddress(page) {
       page,
       addressCandidates,
       "place address",
-      5000
+      timeoutMs
     );
   } catch {
     return null;
@@ -410,7 +439,7 @@ function validCoordinates(latitude, longitude) {
 function placeCoordinatesFromUrl(url) {
   let parsedUrl;
   try {
-    parsedUrl = new URL(url);
+    parsedUrl = new URL(url, "https://www.google.com");
   } catch {
     return null;
   }
@@ -442,6 +471,109 @@ function placeCoordinatesFromUrl(url) {
   return null;
 }
 
+function placeIdFromUrl(url) {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(url, "https://www.google.com");
+  } catch {
+    return null;
+  }
+
+  if (!parsedUrl.pathname.includes("/place/")) return null;
+  return parsedUrl.href.match(/!1s([^!]+)/)?.[1] ?? null;
+}
+
+function placePathFromUrl(url) {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(url, "https://www.google.com");
+  } catch {
+    return null;
+  }
+
+  if (!parsedUrl.pathname.includes("/place/")) return null;
+  return parsedUrl.pathname.toLocaleLowerCase();
+}
+
+function placeReferenceFromUrl(url) {
+  if (!url) return null;
+
+  const placeId = placeIdFromUrl(url);
+  const coordinates = placeCoordinatesFromUrl(url);
+  const path = placePathFromUrl(url);
+  if (!placeId && !coordinates && !path) return null;
+
+  return { placeId, coordinates, path };
+}
+
+function placeReferencesMatch(first, second) {
+  if (first.placeId && second.placeId) return first.placeId === second.placeId;
+  if (first.coordinates && second.coordinates) {
+    return distanceInMeters(first.coordinates, second.coordinates) <= 100;
+  }
+  if (first.path && second.path) return first.path === second.path;
+  return true;
+}
+
+function normalizedPlaceName(name) {
+  return String(name ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function placeNamesMatch(expectedName, actualName) {
+  const expected = normalizedPlaceName(expectedName?.split(",", 1)[0]);
+  const actual = normalizedPlaceName(actualName);
+  if (!expected || !actual) return false;
+  return (
+    expected === actual ||
+    expected.includes(actual) ||
+    actual.includes(expected)
+  );
+}
+
+function absoluteMapsUrl(url) {
+  if (!url) return null;
+  try {
+    return new URL(url, "https://www.google.com").toString();
+  } catch {
+    return url;
+  }
+}
+
+async function capturePlaceIdentity(page, fallbackUrl = null) {
+  const currentUrl = pageUrl(page);
+  const currentReference = placeReferenceFromUrl(currentUrl);
+  const fallbackReference = placeReferenceFromUrl(fallbackUrl);
+  if (
+    currentReference &&
+    fallbackReference &&
+    !placeReferencesMatch(currentReference, fallbackReference)
+  ) {
+    const error = new Error(
+      `Google Maps changed place while handling the row: ` +
+        `${fallbackUrl ?? "the expected place"} -> ${currentUrl ?? "the current page"}`
+    );
+    error.code = "PLACE_UNVERIFIED";
+    throw error;
+  }
+
+  const reference = currentReference ?? fallbackReference;
+  return {
+    googleUrl: currentReference
+      ? currentUrl
+      : absoluteMapsUrl(fallbackUrl) ?? currentUrl,
+    name: await findPlaceName(page),
+    address: await findPlaceAddress(page, 3000),
+    placeId: reference?.placeId ?? null,
+    path: reference?.path ?? null,
+    coordinates: reference?.coordinates ?? null,
+  };
+}
+
 function distanceInMeters(first, second) {
   const earthRadiusM = 6_371_000;
   const toRadians = (degrees) => (degrees * Math.PI) / 180;
@@ -459,11 +591,33 @@ function distanceInMeters(first, second) {
   return 2 * earthRadiusM * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 }
 
-async function verifyPlaceLocation(page, row, maxDistanceM) {
-  const expected = sourceCoordinates(row);
-  if (!expected) return;
+async function verifyPlaceLocation(page, row, maxDistanceM, fallbackUrl = null) {
+  const identity = await capturePlaceIdentity(page, fallbackUrl);
+  if (!placeNamesMatch(row.name, identity.name)) {
+    const error = new Error(
+      `place name mismatch for ${row.name}: Google Maps shows ${JSON.stringify(identity.name)}`
+    );
+    error.code = "PLACE_UNVERIFIED";
+    throw error;
+  }
 
-  const actual = placeCoordinatesFromUrl(page.url());
+  const expected = sourceCoordinates(row);
+  if (!expected) {
+    if (row.address?.trim() && identity.address) {
+      if (!addressesMatch(row.address, identity.address)) {
+        const error = new Error(
+          `address mismatch for ${row.name}: Google Maps shows ${JSON.stringify(identity.address)}, ` +
+            `source address is ${JSON.stringify(row.address)}`
+        );
+        error.code = "LOCATION_UNVERIFIED";
+        throw error;
+      }
+      console.log(`verified ${row.name}: matched place address`);
+    }
+    return identity;
+  }
+
+  const actual = identity.coordinates;
   if (actual) {
     const distanceM = distanceInMeters(expected, actual);
     if (distanceM > maxDistanceM) {
@@ -479,13 +633,13 @@ async function verifyPlaceLocation(page, row, maxDistanceM) {
     console.log(
       `verified ${row.name}: ${Math.round(distanceM)}m from source coordinates`
     );
-    return;
+    return { ...identity, distanceM };
   }
 
-  const placeAddress = await findPlaceAddress(page);
+  const placeAddress = identity.address;
   if (!placeAddress) {
     const error = new Error(
-      `could not verify ${row.name}: Google Maps did not expose a place address (current URL: ${page.url()})`
+      `could not verify ${row.name}: Google Maps did not expose a place address (current URL: ${pageUrl(page)})`
     );
     error.code = "LOCATION_UNVERIFIED";
     throw error;
@@ -500,6 +654,28 @@ async function verifyPlaceLocation(page, row, maxDistanceM) {
   }
 
   console.log(`verified ${row.name}: matched place address`);
+  return identity;
+}
+
+function placeIdentitiesMatch(first, second) {
+  if (first.placeId && second.placeId) {
+    return first.placeId === second.placeId;
+  }
+  if (first.coordinates && second.coordinates) {
+    return distanceInMeters(first.coordinates, second.coordinates) <= 100;
+  }
+  return placeNamesMatch(first.name, second.name);
+}
+
+function assertSamePlace(row, first, second) {
+  if (placeIdentitiesMatch(first, second)) return;
+
+  const error = new Error(
+    `Google Maps changed place after saving ${row.name}: ` +
+      `${JSON.stringify(first.name)} -> ${JSON.stringify(second.name)}`
+  );
+  error.code = "PLACE_UNVERIFIED";
+  throw error;
 }
 
 function unresolvedPlaceError(name, cause) {
@@ -517,27 +693,42 @@ async function findSaveButtonForSearch(page, row, searchUrl, candidates) {
   });
   await page.waitForTimeout(3500);
 
-  try {
-    return await findFirstVisible(page, candidates, "Save button");
-  } catch (error) {
-    const result = await findSearchResult(page, row.name);
-    if (!result) {
-      if (sourceCoordinates(row) || row.address?.trim()) {
-        throw unresolvedPlaceError(row.name, error);
-      }
-      throw error;
-    }
-
+  const currentUrl = pageUrl(page);
+  const currentName = await findPlaceName(page, 1000);
+  const alreadyOnMatchingPlace =
+    placeReferenceFromUrl(currentUrl) &&
+    placeNamesMatch(row.name, currentName);
+  const result = alreadyOnMatchingPlace
+    ? null
+    : await findSearchResult(page, row.name);
+  let resultUrl = null;
+  if (result) {
+    resultUrl = await result.getAttribute("href");
     await result.click({ timeout: 10000 });
     await page.waitForTimeout(3500);
-    try {
-      return await findFirstVisible(page, candidates, "Save button after selecting result");
-    } catch (afterSelectingError) {
-      if (sourceCoordinates(row) || row.address?.trim()) {
-        throw unresolvedPlaceError(row.name, afterSelectingError);
-      }
-      throw afterSelectingError;
+  } else {
+    const selectedName = await findPlaceName(page);
+    if (!placeNamesMatch(row.name, selectedName)) {
+      throw unresolvedPlaceError(
+        row.name,
+        new Error(
+          `Google Maps did not show a matching result (current place: ${JSON.stringify(selectedName)})`
+        )
+      );
     }
+    if (alreadyOnMatchingPlace) resultUrl = currentUrl;
+  }
+
+  try {
+    return {
+      saveButton: await findFirstVisible(page, candidates, "Save button"),
+      resultUrl,
+    };
+  } catch (error) {
+    if (sourceCoordinates(row) || row.address?.trim()) {
+      throw unresolvedPlaceError(row.name, error);
+    }
+    throw error;
   }
 }
 
@@ -555,6 +746,8 @@ async function savePlace(page, row, maxDistanceM, noteTimeoutMs) {
   }
 
   let saveButton;
+  let resultUrl;
+  let verifiedPlace;
   let lastError;
   for (let index = 0; index < searchUrls.length; index += 1) {
     const searchUrl = searchUrls[index];
@@ -563,18 +756,29 @@ async function savePlace(page, row, maxDistanceM, noteTimeoutMs) {
     }
 
     try {
-      saveButton = await findSaveButtonForSearch(
+      const selected = await findSaveButtonForSearch(
         page,
         row,
         searchUrl,
         saveButtonCandidates
       );
-      await verifyPlaceLocation(page, row, maxDistanceM);
+      saveButton = selected.saveButton;
+      resultUrl = selected.resultUrl;
+      verifiedPlace = await verifyPlaceLocation(
+        page,
+        row,
+        maxDistanceM,
+        resultUrl
+      );
       break;
     } catch (error) {
       lastError = error;
       if (
-        !["PLACE_UNRESOLVED", "LOCATION_UNVERIFIED"].includes(error.code) ||
+        ![
+          "PLACE_UNRESOLVED",
+          "PLACE_UNVERIFIED",
+          "LOCATION_UNVERIFIED",
+        ].includes(error.code) ||
         index === searchUrls.length - 1
       ) {
         throw error;
@@ -593,18 +797,27 @@ async function savePlace(page, row, maxDistanceM, noteTimeoutMs) {
     );
   }
 
+  const savedPlace = await verifyPlaceLocation(
+    page,
+    row,
+    maxDistanceM,
+    verifiedPlace.googleUrl
+  );
+  assertSamePlace(row, verifiedPlace, savedPlace);
+
   const checked = await listItem.getAttribute("aria-checked").catch(() => null);
   if (checked === "true") {
     console.log(`already saved: ${row.name} -> ${row.listName}`);
     await page.keyboard.press("Escape").catch(() => {});
     await addNoteIfPossible(page, row.listName, row.note, noteTimeoutMs);
-    return;
+    return savedPlace;
   }
 
   await listItem.click({ timeout: 10000 });
   await page.waitForTimeout(1000);
   await page.keyboard.press("Escape").catch(() => {});
   await addNoteIfPossible(page, row.listName, row.note, noteTimeoutMs);
+  return savedPlace;
 }
 
 const options = getopts(process.argv.slice(2), {
@@ -711,7 +924,12 @@ try {
     console.log(`[${attempted}] saving ${row.name} -> ${row.listName}`);
 
     try {
-      await savePlace(browser.page, row, maxDistanceM, noteTimeoutMs);
+      const verifiedPlace = await savePlace(
+        browser.page,
+        row,
+        maxDistanceM,
+        noteTimeoutMs
+      );
 
       const key = placeKey(row);
       completed.add(key);
@@ -719,7 +937,8 @@ try {
       recordAttempt(checkpoint, row, "succeeded", {
         startedAt,
         finishedAt: new Date().toISOString(),
-        googleUrl: pageUrl(browser.page),
+        googleUrl: verifiedPlace.googleUrl,
+        verifiedPlace,
         maxDistanceM,
         noteTimeoutMs,
       });
