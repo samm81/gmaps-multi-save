@@ -78,6 +78,8 @@ npm run gmaps:save-list -- 'build/michelin-regional.csv' \
 
 The checkpoint records completed rows and an attempt history with timestamps, source metadata, resolved Google URLs, errors, and failure screenshots under `output/playwright/`. By default, rerunning skips both completed rows and rows already present in the attempt history, including failures. Add `--retry-failed` to retry previous failures. Use `--dry-run` to inspect counts first, or omit `--continue-on-error` to stop after recording the first failure.
 
+If the Playwright page, context, or browser closes while handling a failure, the runner records the failure safely and attempts to reopen Google Maps with the same profile before continuing. Use `--continue-on-error` if later rows should continue after that failed row.
+
 A failed attempt can be left half done: Google Maps may add the place to the list before the note field appears or the note is saved. When rerunning errors, an already-saved place may therefore still need its text note added; the runner checks the list state and retries note entry. The runner waits up to 60 seconds for the note field by default; change this with `--note-timeout-ms 120000`.
 
 ### migration reminder

@@ -12,6 +12,7 @@ const checkpointDefault = ".playwright/gmaps-save-checkpoint.json";
 const screenshotDir = "output/playwright";
 const googleListNameMaxLength = 40;
 const noteTimeoutMsDefault = 60000;
+const browserReopenAttempts = 3;
 
 function truncateListName(listName) {
   return listName.slice(0, googleListNameMaxLength);
@@ -83,15 +84,75 @@ function errorDetails(error) {
   return error instanceof Error ? error.stack ?? error.message : String(error);
 }
 
+function pageIsClosed(page) {
+  return !page || page.isClosed();
+}
+
+function pageUrl(page) {
+  try {
+    return page?.url() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function isBrowserTargetClosed(page, error) {
+  return (
+    pageIsClosed(page) ||
+    /Target page, context or browser has been closed|Target closed|browser has been closed|context has been closed/i.test(
+      errorDetails(error)
+    )
+  );
+}
+
+async function openMapsBrowser() {
+  const context = await launchMapsContext();
+  const page = context.pages()[0] ?? (await context.newPage());
+  return { context, page };
+}
+
+async function reopenMapsBrowser(browser) {
+  await browser.context.close().catch(() => {});
+
+  let lastError;
+  for (let attempt = 1; attempt <= browserReopenAttempts; attempt += 1) {
+    let reopened;
+    try {
+      reopened = await openMapsBrowser();
+      try {
+        await reopened.page.goto("https://www.google.com/maps", {
+          waitUntil: "domcontentloaded",
+          timeout: 45000,
+        });
+      } catch (navigationError) {
+        if (pageIsClosed(reopened.page)) throw navigationError;
+        console.error(
+          `reopened browser, but could not load Google Maps home: ${errorDetails(navigationError)}`
+        );
+      }
+      console.error("reopened Google Maps browser after it closed");
+      return reopened;
+    } catch (error) {
+      lastError = error;
+      if (reopened) await reopened.context.close().catch(() => {});
+      if (attempt < browserReopenAttempts) await sleep(attempt * 1000);
+    }
+  }
+
+  throw new Error(
+    `could not reopen Google Maps browser after ${browserReopenAttempts} attempts: ${errorDetails(lastError)}`
+  );
+}
+
 async function captureFailureScreenshot(page) {
   const screenshotPath = path.join(screenshotDir, `failure-${Date.now()}.png`);
   try {
     await mkdir(screenshotDir, { recursive: true });
     await page.screenshot({ path: screenshotPath, fullPage: true });
-    return screenshotPath;
+    return { path: screenshotPath, error: null };
   } catch (error) {
     console.error(`could not save failure screenshot: ${errorDetails(error)}`);
-    return null;
+    return { path: null, error };
   }
 }
 
@@ -636,8 +697,7 @@ if (options.dryRun) {
   process.exit(0);
 }
 
-const context = await launchMapsContext();
-const page = context.pages()[0] ?? (await context.newPage());
+let browser = await openMapsBrowser();
 let attempted = 0;
 let succeeded = 0;
 let failed = 0;
@@ -651,7 +711,7 @@ try {
     console.log(`[${attempted}] saving ${row.name} -> ${row.listName}`);
 
     try {
-      await savePlace(page, row, maxDistanceM, noteTimeoutMs);
+      await savePlace(browser.page, row, maxDistanceM, noteTimeoutMs);
 
       const key = placeKey(row);
       completed.add(key);
@@ -659,33 +719,49 @@ try {
       recordAttempt(checkpoint, row, "succeeded", {
         startedAt,
         finishedAt: new Date().toISOString(),
-        googleUrl: page.url(),
+        googleUrl: pageUrl(browser.page),
         maxDistanceM,
         noteTimeoutMs,
       });
       await writeCheckpoint(options.checkpoint, checkpoint);
       succeeded += 1;
     } catch (error) {
-      const screenshotPath = await captureFailureScreenshot(page);
+      const failedGoogleUrl = pageUrl(browser.page);
+      const screenshot = await captureFailureScreenshot(browser.page);
+      let recoveryError = null;
+      if (
+        screenshot.error &&
+        isBrowserTargetClosed(browser.page, screenshot.error)
+      ) {
+        try {
+          browser = await reopenMapsBrowser(browser);
+        } catch (error) {
+          recoveryError = error;
+          console.error(
+            `could not recover Google Maps browser: ${errorDetails(error)}`
+          );
+        }
+      }
       recordAttempt(checkpoint, row, "failed", {
         startedAt,
         finishedAt: new Date().toISOString(),
         error: errorDetails(error),
-        screenshot: screenshotPath,
-        googleUrl: page.url(),
+        screenshot: screenshot.path,
+        googleUrl: failedGoogleUrl,
         maxDistanceM,
         noteTimeoutMs,
       });
       await writeCheckpoint(options.checkpoint, checkpoint);
       failed += 1;
       console.error(`failed ${row.name}: ${errorDetails(error)}`);
+      if (recoveryError) throw recoveryError;
       if (!options.continueOnError) throw error;
     }
 
     await sleep(delayMs);
   }
 } finally {
-  await context.close();
+  await browser.context.close().catch(() => {});
 }
 
 console.log(`attempted ${attempted} place(s); succeeded ${succeeded}; failed ${failed}`);
