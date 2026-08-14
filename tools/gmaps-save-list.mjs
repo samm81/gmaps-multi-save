@@ -23,7 +23,7 @@ function usage() {
     "usage: npm run gmaps:save-list -- places.csv [--list-name name] [--limit 20]",
     "       [--checkpoint path] [--continue-on-error] [--delay-ms 2500]",
     "       [--max-distance-m 1000] [--note-timeout-ms 60000]",
-    "       [--retry-failed] [--dry-run]",
+    "       [--retry-failed] [--remove] [--dry-run]",
     "",
     "CSV columns: name,url,note,listName; optional source metadata: address,location,latitude,longitude",
     "Matching place results are selected and verified before they are saved.",
@@ -31,6 +31,7 @@ function usage() {
     "Successful attempts record the verified place identity.",
     "Google Maps list-name lookups use the first 40 characters.",
     "Rerunning the same command skips rows already attempted; use --retry-failed to retry failures.",
+    "Use --remove to unsave the exact place URL from its list instead of saving it.",
     "Run `npm run gmaps:login` first to create the local Google session.",
   ].join("\n");
 }
@@ -820,6 +821,54 @@ async function savePlace(page, row, maxDistanceM, noteTimeoutMs) {
   return savedPlace;
 }
 
+async function removePlace(page, row) {
+  const saveButtonCandidates = [
+    () => page.locator('[data-value="Save"], [data-value="Saved"]'),
+    () => page.locator('[aria-label="Save"], [aria-label="Saved"]'),
+    () => page.locator('[data-value*="Save"]'),
+    () => page.locator('[aria-label^="Save"]'),
+  ];
+
+  await page.goto(normalizeMapsUrl(row.url), {
+    waitUntil: "domcontentloaded",
+    timeout: 45000,
+  });
+  await page.waitForTimeout(3500);
+
+  const saveButton = await findFirstVisible(page, saveButtonCandidates, "Save button");
+  await saveButton.click({ timeout: 10000 });
+
+  const listItem = await findListItem(page, row.listName);
+  if (!listItem) {
+    throw new Error(
+      `could not find list ${row.listName} (looked for ${truncateListName(row.listName)})`
+    );
+  }
+
+  const checked = await listItem.getAttribute("aria-checked").catch(() => null);
+  if (checked === "false") {
+    console.log(`already removed: ${row.name} -> ${row.listName}`);
+    await page.keyboard.press("Escape").catch(() => {});
+    return { googleUrl: pageUrl(page), removed: false };
+  }
+  if (checked !== "true") {
+    throw new Error(
+      `could not determine whether ${row.name} is saved in ${row.listName}`
+    );
+  }
+
+  await listItem.click({ timeout: 10000 });
+  await page.waitForTimeout(1000);
+  const unchecked = await listItem.getAttribute("aria-checked").catch(() => null);
+  await page.keyboard.press("Escape").catch(() => {});
+  if (unchecked === "true") {
+    throw new Error(`could not remove ${row.name} from ${row.listName}`);
+  }
+
+  console.log(`removed: ${row.name} -> ${row.listName}`);
+  return { googleUrl: pageUrl(page), removed: true };
+}
+
 const options = getopts(process.argv.slice(2), {
   alias: {
     checkpoint: ["c"],
@@ -832,6 +881,7 @@ const options = getopts(process.argv.slice(2), {
     noteTimeoutMs: ["note-timeout-ms", "note-timeout"],
     retryFailed: ["retry-failed", "retry-errors", "retry"],
     skipAttempted: ["skip-attempted", "skip-tried"],
+    remove: ["remove", "unsave"],
   },
   default: {
     checkpoint: checkpointDefault,
@@ -921,15 +971,14 @@ try {
 
     attempted += 1;
     const startedAt = new Date().toISOString();
-    console.log(`[${attempted}] saving ${row.name} -> ${row.listName}`);
+    console.log(
+      `[${attempted}] ${options.remove ? "removing" : "saving"} ${row.name} -> ${row.listName}`
+    );
 
     try {
-      const verifiedPlace = await savePlace(
-        browser.page,
-        row,
-        maxDistanceM,
-        noteTimeoutMs
-      );
+      const result = options.remove
+        ? await removePlace(browser.page, row)
+        : await savePlace(browser.page, row, maxDistanceM, noteTimeoutMs);
 
       const key = placeKey(row);
       completed.add(key);
@@ -937,8 +986,10 @@ try {
       recordAttempt(checkpoint, row, "succeeded", {
         startedAt,
         finishedAt: new Date().toISOString(),
-        googleUrl: verifiedPlace.googleUrl,
-        verifiedPlace,
+        googleUrl: result.googleUrl,
+        ...(options.remove
+          ? { removed: result.removed }
+          : { verifiedPlace: result }),
         maxDistanceM,
         noteTimeoutMs,
       });

@@ -82,6 +82,17 @@ If the Playwright page, context, or browser closes while handling a failure, the
 
 A failed attempt can be left half done: Google Maps may add the place to the list before the note field appears or the note is saved. When rerunning errors, an already-saved place may therefore still need its text note added; the runner checks the list state and retries note entry. The runner waits up to 60 seconds for the note field by default; change this with `--note-timeout-ms 120000`.
 
+To remove a stale place from a list, use a CSV containing the exact old Google Maps place URL and list name, then run the same checkpointed workflow with `--remove`. The runner only unchecks a list item when Google reports it is currently checked:
+
+```bash
+npm run gmaps:save-list -- 'stale-places.csv' \
+    --remove \
+    --checkpoint '.playwright/remove-stale-places.json' \
+    --continue-on-error
+```
+
+The removal checkpoint is separate from the save checkpoint, so both operations can be audited and resumed independently.
+
 ### migration reminder
 
 The current manual Michelin list migration is documented in [`michelin-regional-migration.md`](michelin-regional-migration.md).
