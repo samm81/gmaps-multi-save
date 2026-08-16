@@ -3,8 +3,7 @@ import { parse } from "csv-parse";
 import { stringify } from "csv-stringify";
 import { transform } from "stream-transform";
 import getopts from "getopts";
-
-const gmapsSearchUrl = "https://www.google.com/maps/search";
+import { makeGmapsSearchUrl } from "./tools/gmaps-url.mjs";
 const supportedAwards = new Set([
   "1 Star",
   "2 Stars",
@@ -80,10 +79,6 @@ addRegion("other-asia-pacific-middle-east-oceania", [
   "Saudi Arabia",
   "New Zealand",
 ]);
-
-function makeGmapsSearchUrl(name, lat, lon) {
-  return `${gmapsSearchUrl}/${name}/@${lat},${lon}`;
-}
 
 function awardToListName(award) {
   switch (award) {

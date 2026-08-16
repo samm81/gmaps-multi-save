@@ -19,7 +19,7 @@ Close that browser after signing in, then press Enter in the terminal. The profi
 Then generate a CSV using one of the source converters and run:
 
 ```bash
-npm run gmaps:save-list -- places.csv --limit 20 --delay-ms 2500
+npm run gmaps:save-list -- places.csv --limit 20 --delay-ms 1000
 ```
 
 The runner stores the browser profile and checkpoints under `.playwright/`, which is ignored by Git. Keep Google Maps open in the launched browser, stop if Google shows an account challenge, and rerun the same command to resume after already-completed rows.
@@ -59,7 +59,7 @@ To reverse the full regional file, run `make build/michelin-regional-reversed.cs
 
 To omit Mainland China, generate `build/michelin-regional--no-china.csv`. To process that file from the end first, generate `build/michelin-regional--no-china--reversed.csv`; its Bib Gourmand rows come first.
 
-The generated Michelin rows retain the source address and coordinates. The Playwright runner selects a matching Google Maps result before looking for the Save control, verifies the displayed place name and location, then verifies the same place again after Save opens the list picker and immediately before selecting the list. It checks that Google Maps resolved a place within 1,000 meters of the Michelin coordinates; when Google keeps the browser on a search URL, it checks the visible place address instead. If the initial search cannot find a matching place or fails location verification, it retries once with the Michelin address appended to the search term. Rows that do not pass either check are recorded as failures and are not marked complete. Successful checkpoint entries include the verified place identity. Adjust the coordinate tolerance with `--max-distance-m 500` (or another positive distance in meters).
+The generated Michelin rows retain the source address and coordinates. The Playwright runner selects a matching Google Maps result before looking for the Save control, then verifies the place location again after Save opens the list picker and immediately before selecting the list. By default, it only saves a place resolved within 100 meters of the Michelin coordinates; when Google keeps the browser on a search URL, it checks the visible place address instead. A different displayed place name is accepted when the coordinates or address verify the source location. When an address is available, it first searches for the Michelin name with the source address appended, then retries with the name alone if it cannot find or verify a place. Rows that do not pass location verification, including results over 100 meters away, are recorded as failures and are not marked complete for manual review. Successful checkpoint entries include the verified place identity. Adjust the coordinate tolerance with `--max-distance-m 50` (or another positive distance in meters).
 
 After creating those lists in Google Maps, run:
 

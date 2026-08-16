@@ -34,7 +34,7 @@ data/michelin.csv:
 		'https://raw.githubusercontent.com/ngshiheng/michelin-my-maps/main/data/michelin_my_maps.csv' \
 		> $@
 
-build/michelin-regional.csv: data/michelin.csv node_modules michelin-to-csv.mjs
+build/michelin-regional.csv: data/michelin.csv node_modules michelin-to-csv.mjs tools/gmaps-url.mjs
 	mkdir -p build/
 	node michelin-to-csv.mjs \
 		-i data/michelin.csv \

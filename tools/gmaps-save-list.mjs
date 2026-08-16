@@ -13,6 +13,20 @@ const screenshotDir = "output/playwright";
 const googleListNameMaxLength = 40;
 const noteTimeoutMsDefault = 60000;
 const browserReopenAttempts = 3;
+const actionSettleMs = 500;
+const browserReopenDelayMs = 500;
+const navigationSettleMs = 2500;
+const pollIntervalMs = 250;
+const rowDelayMsDefault = 1000;
+const maxDistanceMDefault = 100;
+const savedListItemSelector =
+  '[role="menuitemradio"], [role="menuitemcheckbox"], [role="checkbox"]';
+const placeRetryableErrorCodes = new Set([
+  "PLACE_UNRESOLVED",
+  "PLACE_UNVERIFIED",
+  "LOCATION_UNVERIFIED",
+]);
+const placeCleanupErrorCodes = new Set(["PLACE_UNRESOLVED", "PLACE_UNVERIFIED"]);
 
 function truncateListName(listName) {
   return listName.slice(0, googleListNameMaxLength);
@@ -21,8 +35,8 @@ function truncateListName(listName) {
 function usage() {
   return [
     "usage: npm run gmaps:save-list -- places.csv [--list-name name] [--limit 20]",
-    "       [--checkpoint path] [--continue-on-error] [--delay-ms 2500]",
-    "       [--max-distance-m 1000] [--note-timeout-ms 60000]",
+    "       [--checkpoint path] [--continue-on-error] [--delay-ms 1000]",
+    "       [--max-distance-m 100] [--note-timeout-ms 60000]",
     "       [--retry-failed] [--remove] [--dry-run]",
     "",
     "CSV columns: name,url,note,listName; optional source metadata: address,location,latitude,longitude",
@@ -138,7 +152,9 @@ async function reopenMapsBrowser(browser) {
     } catch (error) {
       lastError = error;
       if (reopened) await reopened.context.close().catch(() => {});
-      if (attempt < browserReopenAttempts) await sleep(attempt * 1000);
+      if (attempt < browserReopenAttempts) {
+        await sleep(attempt * browserReopenDelayMs);
+      }
     }
   }
 
@@ -201,12 +217,23 @@ async function findFirstVisible(page, candidates, description, timeoutMs = 15000
         lastError = error;
       }
     }
-    await sleep(500);
+    await sleep(pollIntervalMs);
   }
 
   throw new Error(
     `could not find visible ${description}: ${lastError?.message ?? "timed out"}`
   );
+}
+
+function saveButtonCandidates(page) {
+  return [
+    () => page.locator('[data-value="Save"], [data-value="Saved"]'),
+    () =>
+      page.locator(
+        '[aria-label^="Save"], [aria-label^="Saved"]'
+      ),
+    () => page.locator('[data-value*="Save"]'),
+  ];
 }
 
 async function clickOptional(candidates) {
@@ -221,24 +248,82 @@ async function clickOptional(candidates) {
 
 async function findListItem(page, listName, timeoutMs = 15000) {
   const visibleListName = truncateListName(listName);
-  const escapedText = JSON.stringify(visibleListName);
-  const selectors = [
-    `[role="menuitemradio"]:has-text(${escapedText})`,
-    `[role="menuitemcheckbox"]:has-text(${escapedText})`,
-    `[role="checkbox"]:has-text(${escapedText})`,
-  ];
+  const candidates = page.locator(savedListItemSelector);
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    for (const selector of selectors) {
-      const locator = page.locator(selector).first();
-      if ((await locator.count()) > 0) return locator;
+    for (let index = 0; index < (await candidates.count()); index += 1) {
+      const locator = candidates.nth(index);
+      if (!(await locator.isVisible().catch(() => false))) continue;
+
+      const text = await locator.innerText().catch(() => "");
+      const lines = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const normalizedText = text.replace(/\s+/g, " ").trim();
+      if (
+        lines.includes(visibleListName) ||
+        normalizedText === visibleListName ||
+        normalizedText.startsWith(`${visibleListName} `)
+      ) {
+        return locator;
+      }
     }
 
-    await sleep(250);
+    await sleep(pollIntervalMs);
   }
 
   return null;
+}
+
+async function listPickerIsOpen(page) {
+  const listItems = page.locator(savedListItemSelector);
+  for (let index = 0; index < (await listItems.count()); index += 1) {
+    if (await listItems.nth(index).isVisible().catch(() => false)) return true;
+  }
+  return false;
+}
+
+async function ensureListPickerOpen(page, listName, saveButtonCandidates) {
+  const existingListItem = await findListItem(page, listName, 1000);
+  if (existingListItem) return existingListItem;
+
+  if (!(await listPickerIsOpen(page))) {
+    await page.waitForTimeout(actionSettleMs);
+    const saveButton = await findFirstVisible(
+      page,
+      saveButtonCandidates,
+      "Save button"
+    );
+    await saveButton.click({ timeout: 10000 });
+  }
+
+  const listItem = await findListItem(page, listName);
+  if (!listItem) {
+    throw new Error(`could not find list ${truncateListName(listName)}`);
+  }
+  return listItem;
+}
+
+async function findVisibleMichelinListNames(page) {
+  const listItems = page.locator(savedListItemSelector);
+  const names = new Set();
+
+  for (let index = 0; index < (await listItems.count()); index += 1) {
+    const listItem = listItems.nth(index);
+    if (!(await listItem.isVisible().catch(() => false))) continue;
+
+    const lines = (await listItem.innerText().catch(() => ""))
+      .split(/\r?\n/)
+      .map((line) => line.trim());
+    const listName = lines
+      .map((line) => line.match(/^(michelin-\S+)/i)?.[1])
+      .find(Boolean);
+    if (listName) names.add(listName);
+  }
+
+  return [...names];
 }
 
 function escapeRegExp(value) {
@@ -281,7 +366,116 @@ async function addNoteIfPossible(page, listName, note, noteTimeoutMs) {
 
   await textarea.fill(note);
   await textarea.press("Tab");
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(actionSettleMs);
+}
+
+async function getCheckedMichelinListNames(page, targetListName) {
+  const visibleListNames = await findVisibleMichelinListNames(page);
+  const checkedListNames = [];
+  for (const listName of visibleListNames) {
+    if (listName.toLocaleLowerCase() === targetListName.toLocaleLowerCase()) {
+      continue;
+    }
+
+    const listItem = await findListItem(page, listName, 3000);
+    if (!listItem) continue;
+    const checked = await listItem.getAttribute("aria-checked").catch(() => null);
+    if (checked === "true") checkedListNames.push(listName);
+  }
+  return checkedListNames;
+}
+
+async function setListChecked(page, listName, desiredChecked, saveButtonCandidates) {
+  const listItem = await ensureListPickerOpen(
+    page,
+    listName,
+    saveButtonCandidates
+  );
+  const checked = await listItem.getAttribute("aria-checked").catch(() => null);
+  if (checked !== "true" && checked !== "false") {
+    throw new Error(`could not determine whether ${listName} is saved`);
+  }
+
+  const initiallyChecked = checked === "true";
+  if (initiallyChecked === desiredChecked) {
+    return { initiallyChecked, changed: false };
+  }
+
+  await listItem.click({ timeout: 10000 });
+  const deadline = Date.now() + 15000;
+  let finalChecked;
+  while (Date.now() < deadline) {
+    const finalListItem = await ensureListPickerOpen(
+      page,
+      listName,
+      saveButtonCandidates
+    );
+    finalChecked = await finalListItem
+      .getAttribute("aria-checked")
+      .catch(() => null);
+    if (finalChecked === String(desiredChecked)) {
+      return { initiallyChecked, changed: true };
+    }
+    await sleep(pollIntervalMs);
+  }
+
+  throw new Error(
+    `could not ${desiredChecked ? "save" : "remove"} ${listName} ` +
+      `(last state: ${finalChecked ?? "unknown"})`
+  );
+}
+
+async function correctMichelinListMembership(page, row, saveButtonCandidates) {
+  const targetListName = truncateListName(row.listName);
+  const movedFrom = [];
+  const targetListItem = await ensureListPickerOpen(
+    page,
+    row.listName,
+    saveButtonCandidates
+  );
+  const initiallyChecked =
+    (await targetListItem.getAttribute("aria-checked").catch(() => null)) ===
+    "true";
+
+  if (!/^michelin-/i.test(row.listName)) {
+    await setListChecked(page, row.listName, true, saveButtonCandidates);
+    return { initiallyChecked, movedFrom };
+  }
+
+  const checkedMichelinListNames = await getCheckedMichelinListNames(
+    page,
+    targetListName
+  );
+  for (const listName of checkedMichelinListNames) {
+    console.log(`moving ${row.name}: ${listName} -> ${targetListName}`);
+    await setListChecked(page, listName, false, saveButtonCandidates);
+    movedFrom.push(listName);
+  }
+
+  await setListChecked(page, row.listName, true, saveButtonCandidates);
+  return { initiallyChecked, movedFrom };
+}
+
+async function removeWrongMichelinMemberships(page, row, saveButtonCandidates) {
+  if (!/^michelin-/i.test(row.listName)) {
+    return { locationVerified: true, removedFrom: [] };
+  }
+
+  const targetListName = truncateListName(row.listName);
+  await ensureListPickerOpen(page, row.listName, saveButtonCandidates);
+  const checkedWrongListNames = await getCheckedMichelinListNames(
+    page,
+    targetListName
+  );
+  const removedFrom = [];
+  for (const listName of checkedWrongListNames) {
+    console.log(`removing wrong saved list: ${row.name} -> ${listName}`);
+    await setListChecked(page, listName, false, saveButtonCandidates);
+    removedFrom.push(listName);
+  }
+
+  await page.keyboard.press("Escape").catch(() => {});
+  return { locationVerified: true, removedFrom };
 }
 
 async function findSearchResult(page, name, timeoutMs = 15000) {
@@ -298,7 +492,7 @@ async function findSearchResult(page, name, timeoutMs = 15000) {
       const resultText = `${label} ${text}`.toLocaleLowerCase();
       if (resultText.includes(searchName)) return resultLink;
     }
-    await sleep(500);
+    await sleep(pollIntervalMs);
   }
 
   return null;
@@ -481,7 +675,15 @@ function placeIdFromUrl(url) {
   }
 
   if (!parsedUrl.pathname.includes("/place/")) return null;
-  return parsedUrl.href.match(/!1s([^!]+)/)?.[1] ?? null;
+  const placeIdMatches = [
+    ...parsedUrl.href.matchAll(/!3m\d+!1s([^!]+)/g),
+  ];
+  if (placeIdMatches.length > 0) {
+    return placeIdMatches.at(-1)[1];
+  }
+
+  const fallbackMatches = [...parsedUrl.href.matchAll(/!1s([^!]+)/g)];
+  return fallbackMatches.at(-1)?.[1] ?? null;
 }
 
 function placePathFromUrl(url) {
@@ -507,13 +709,17 @@ function placeReferenceFromUrl(url) {
   return { placeId, coordinates, path };
 }
 
-function placeReferencesMatch(first, second) {
+function placesMatch(first, second, maxDistanceM = maxDistanceMDefault) {
+  if (!first || !second) return false;
   if (first.placeId && second.placeId) return first.placeId === second.placeId;
   if (first.coordinates && second.coordinates) {
-    return distanceInMeters(first.coordinates, second.coordinates) <= 100;
+    return distanceInMeters(first.coordinates, second.coordinates) <= maxDistanceM;
   }
   if (first.path && second.path) return first.path === second.path;
-  return true;
+  if (first.name && second.name) {
+    return placeNamesMatch(first.name, second.name);
+  }
+  return false;
 }
 
 function normalizedPlaceName(name) {
@@ -545,14 +751,14 @@ function absoluteMapsUrl(url) {
   }
 }
 
-async function capturePlaceIdentity(page, fallbackUrl = null) {
+async function capturePlaceIdentity(page, maxDistanceM, fallbackUrl = null) {
   const currentUrl = pageUrl(page);
   const currentReference = placeReferenceFromUrl(currentUrl);
   const fallbackReference = placeReferenceFromUrl(fallbackUrl);
   if (
     currentReference &&
     fallbackReference &&
-    !placeReferencesMatch(currentReference, fallbackReference)
+    !placesMatch(currentReference, fallbackReference, maxDistanceM)
   ) {
     const error = new Error(
       `Google Maps changed place while handling the row: ` +
@@ -592,16 +798,13 @@ function distanceInMeters(first, second) {
   return 2 * earthRadiusM * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 }
 
-async function verifyPlaceLocation(page, row, maxDistanceM, fallbackUrl = null) {
-  const identity = await capturePlaceIdentity(page, fallbackUrl);
-  if (!placeNamesMatch(row.name, identity.name)) {
-    const error = new Error(
-      `place name mismatch for ${row.name}: Google Maps shows ${JSON.stringify(identity.name)}`
-    );
-    error.code = "PLACE_UNVERIFIED";
-    throw error;
-  }
-
+async function verifyPlaceLocationData(
+  page,
+  row,
+  identity,
+  maxDistanceM,
+  { requireSourceLocation = false } = {}
+) {
   const expected = sourceCoordinates(row);
   if (!expected) {
     if (row.address?.trim() && identity.address) {
@@ -614,6 +817,12 @@ async function verifyPlaceLocation(page, row, maxDistanceM, fallbackUrl = null) 
         throw error;
       }
       console.log(`verified ${row.name}: matched place address`);
+    } else if (requireSourceLocation) {
+      const error = new Error(
+        `could not verify ${row.name}: Google Maps did not expose a place address to compare with the source`
+      );
+      error.code = "LOCATION_UNVERIFIED";
+      throw error;
     }
     return identity;
   }
@@ -658,22 +867,54 @@ async function verifyPlaceLocation(page, row, maxDistanceM, fallbackUrl = null) 
   return identity;
 }
 
-function placeIdentitiesMatch(first, second) {
-  if (first.placeId && second.placeId) {
-    return first.placeId === second.placeId;
+async function verifyPlaceLocation(
+  page,
+  row,
+  maxDistanceM,
+  fallbackUrl = null,
+  {
+    requireSourceLocation = false,
+    allowNameMismatchWithoutLocation = false,
+  } = {}
+) {
+  const identity = await capturePlaceIdentity(page, maxDistanceM, fallbackUrl);
+  const nameMatches = placeNamesMatch(row.name, identity.name);
+
+  const verified = await verifyPlaceLocationData(
+    page,
+    row,
+    identity,
+    maxDistanceM,
+    {
+      requireSourceLocation:
+        requireSourceLocation ||
+        (!nameMatches && !allowNameMismatchWithoutLocation),
+    }
+  );
+  if (!nameMatches) {
+    console.log(
+      `verified ${row.name}: location matched despite Google Maps name ${JSON.stringify(identity.name)}`
+    );
   }
-  if (first.coordinates && second.coordinates) {
-    return distanceInMeters(first.coordinates, second.coordinates) <= 100;
-  }
-  return placeNamesMatch(first.name, second.name);
+  return verified;
 }
 
-function assertSamePlace(row, first, second) {
-  if (placeIdentitiesMatch(first, second)) return;
+function assertSamePlace(row, first, second, maxDistanceM) {
+  if (placesMatch(first, second, maxDistanceM)) return;
 
   const error = new Error(
     `Google Maps changed place after saving ${row.name}: ` +
       `${JSON.stringify(first.name)} -> ${JSON.stringify(second.name)}`
+  );
+  error.code = "PLACE_UNVERIFIED";
+  throw error;
+}
+
+function assertExpectedPlace(row, expected, actual, maxDistanceM) {
+  if (placesMatch(expected, actual, maxDistanceM)) return;
+
+  const error = new Error(
+    `Google Maps resolved ${row.name} to a different place than the source URL`
   );
   error.code = "PLACE_UNVERIFIED";
   throw error;
@@ -687,37 +928,35 @@ function unresolvedPlaceError(name, cause) {
   return error;
 }
 
-async function findSaveButtonForSearch(page, row, searchUrl, candidates) {
+async function findPlaceForSearch(page, row, searchUrl, candidates) {
   await page.goto(searchUrl, {
     waitUntil: "domcontentloaded",
     timeout: 45000,
   });
-  await page.waitForTimeout(3500);
+  await page.waitForTimeout(navigationSettleMs);
 
   const currentUrl = pageUrl(page);
-  const currentName = await findPlaceName(page, 1000);
-  const alreadyOnMatchingPlace =
-    placeReferenceFromUrl(currentUrl) &&
-    placeNamesMatch(row.name, currentName);
-  const result = alreadyOnMatchingPlace
-    ? null
-    : await findSearchResult(page, row.name);
-  let resultUrl = null;
-  if (result) {
-    resultUrl = await result.getAttribute("href");
-    await result.click({ timeout: 10000 });
-    await page.waitForTimeout(3500);
-  } else {
-    const selectedName = await findPlaceName(page);
-    if (!placeNamesMatch(row.name, selectedName)) {
-      throw unresolvedPlaceError(
-        row.name,
-        new Error(
-          `Google Maps did not show a matching result (current place: ${JSON.stringify(selectedName)})`
-        )
-      );
+  const currentReference = placeReferenceFromUrl(currentUrl);
+  let resultUrl = currentReference ? currentUrl : null;
+  if (!currentReference) {
+    const result = await findSearchResult(page, row.name);
+    if (result) {
+      resultUrl = await result.getAttribute("href");
+      await result.click({ timeout: 10000 });
+      await page.waitForTimeout(navigationSettleMs);
+    } else {
+      const selectedName = await findPlaceName(page);
+      if (!placeNamesMatch(row.name, selectedName)) {
+        const error = unresolvedPlaceError(
+          row.name,
+          new Error(
+            `Google Maps did not show a matching result (current place: ${JSON.stringify(selectedName)})`
+          )
+        );
+        error.resultUrl = pageUrl(page);
+        throw error;
+      }
     }
-    if (alreadyOnMatchingPlace) resultUrl = currentUrl;
   }
 
   try {
@@ -733,140 +972,168 @@ async function findSaveButtonForSearch(page, row, searchUrl, candidates) {
   }
 }
 
-async function savePlace(page, row, maxDistanceM, noteTimeoutMs) {
-  const saveButtonCandidates = [
-    () => page.locator('[data-value="Save"], [data-value="Saved"]'),
-    () => page.locator('[aria-label="Save"], [aria-label="Saved"]'),
-    () => page.locator('[data-value*="Save"]'),
-    () => page.locator('[aria-label^="Save"]'),
-  ];
-  const searchUrls = [normalizeMapsUrl(row.url)];
+function searchAttemptsForRow(row) {
+  const nameSearchUrl = normalizeMapsUrl(row.url);
   const addressSearchUrl = appendAddressSearchTerm(row.url, row.address);
-  if (addressSearchUrl && addressSearchUrl !== searchUrls[0]) {
-    searchUrls.push(addressSearchUrl);
+  const attempts = [];
+  if (addressSearchUrl && addressSearchUrl !== nameSearchUrl) {
+    attempts.push({
+      url: addressSearchUrl,
+      description: "its name and source address",
+    });
   }
+  attempts.push({ url: nameSearchUrl, description: "its name only" });
+  return attempts;
+}
 
-  let saveButton;
-  let resultUrl;
-  let verifiedPlace;
+async function resolvePlace(
+  page,
+  row,
+  maxDistanceM,
+  candidates,
+  {
+    cleanupOnFailure = false,
+    verificationOptions = {},
+    expectedReference = null,
+  } = {}
+) {
+  const searchAttempts = searchAttemptsForRow(row);
   let lastError;
-  for (let index = 0; index < searchUrls.length; index += 1) {
-    const searchUrl = searchUrls[index];
+
+  for (let index = 0; index < searchAttempts.length; index += 1) {
+    const { url: searchUrl, description } = searchAttempts[index];
+    let attemptResultUrl;
     if (index > 0) {
-      console.log(`retrying ${row.name} with its source address`);
+      console.log(`retrying ${row.name} with ${description}`);
     }
 
     try {
-      const selected = await findSaveButtonForSearch(
+      const selected = await findPlaceForSearch(
         page,
         row,
         searchUrl,
-        saveButtonCandidates
+        candidates
       );
-      saveButton = selected.saveButton;
-      resultUrl = selected.resultUrl;
-      verifiedPlace = await verifyPlaceLocation(
+      attemptResultUrl = selected.resultUrl;
+      const verifiedPlace = await verifyPlaceLocation(
         page,
         row,
         maxDistanceM,
-        resultUrl
+        attemptResultUrl,
+        verificationOptions
       );
-      break;
+      if (expectedReference) {
+        assertExpectedPlace(row, expectedReference, verifiedPlace, maxDistanceM);
+      }
+      return { ...selected, verifiedPlace };
     } catch (error) {
       lastError = error;
-      if (
-        ![
-          "PLACE_UNRESOLVED",
-          "PLACE_UNVERIFIED",
-          "LOCATION_UNVERIFIED",
-        ].includes(error.code) ||
-        index === searchUrls.length - 1
-      ) {
-        throw error;
+      const cleanupResultUrl = error.resultUrl ?? attemptResultUrl;
+      const finalAttempt =
+        !placeRetryableErrorCodes.has(error.code) ||
+        index === searchAttempts.length - 1;
+      if (!finalAttempt) continue;
+
+      if (cleanupOnFailure && placeCleanupErrorCodes.has(error.code)) {
+        try {
+          await verifyPlaceLocation(
+            page,
+            row,
+            maxDistanceM,
+            cleanupResultUrl,
+            { requireSourceLocation: true }
+          );
+          error.cleanup = await removeWrongMichelinMemberships(
+            page,
+            row,
+            candidates
+          );
+        } catch (cleanupError) {
+          error.cleanupError = errorDetails(cleanupError);
+          console.error(
+            `could not clean up wrong Michelin memberships for ${row.name}: ${errorDetails(cleanupError)}`
+          );
+        }
       }
+      throw error;
     }
   }
 
-  if (!saveButton) throw lastError;
+  throw lastError;
+}
 
-  await saveButton.click({ timeout: 10000 });
-
-  const listItem = await findListItem(page, row.listName);
-  if (!listItem) {
-    throw new Error(
-      `could not find list ${row.listName} (looked for ${truncateListName(row.listName)})`
-    );
-  }
-
-  const savedPlace = await verifyPlaceLocation(
+async function savePlace(page, row, maxDistanceM, noteTimeoutMs) {
+  const candidates = saveButtonCandidates(page);
+  const resolved = await resolvePlace(
     page,
     row,
     maxDistanceM,
-    verifiedPlace.googleUrl
+    candidates,
+    { cleanupOnFailure: true }
   );
-  assertSamePlace(row, verifiedPlace, savedPlace);
 
-  const checked = await listItem.getAttribute("aria-checked").catch(() => null);
-  if (checked === "true") {
+  await resolved.saveButton.click({ timeout: 10000 });
+  const verifiedSavedPlace = await verifyPlaceLocation(
+    page,
+    row,
+    maxDistanceM,
+    resolved.verifiedPlace.googleUrl
+  );
+  assertSamePlace(
+    row,
+    resolved.verifiedPlace,
+    verifiedSavedPlace,
+    maxDistanceM
+  );
+
+  const membership = await correctMichelinListMembership(
+    page,
+    row,
+    candidates
+  );
+  if (membership.initiallyChecked && membership.movedFrom.length === 0) {
     console.log(`already saved: ${row.name} -> ${row.listName}`);
-    await page.keyboard.press("Escape").catch(() => {});
-    await addNoteIfPossible(page, row.listName, row.note, noteTimeoutMs);
-    return savedPlace;
+  } else if (membership.movedFrom.length > 0) {
+    console.log(`corrected saved list: ${row.name} -> ${row.listName}`);
   }
-
-  await listItem.click({ timeout: 10000 });
-  await page.waitForTimeout(1000);
   await page.keyboard.press("Escape").catch(() => {});
   await addNoteIfPossible(page, row.listName, row.note, noteTimeoutMs);
-  return savedPlace;
+  return { ...verifiedSavedPlace, movedFrom: membership.movedFrom };
 }
 
-async function removePlace(page, row) {
-  const saveButtonCandidates = [
-    () => page.locator('[data-value="Save"], [data-value="Saved"]'),
-    () => page.locator('[aria-label="Save"], [aria-label="Saved"]'),
-    () => page.locator('[data-value*="Save"]'),
-    () => page.locator('[aria-label^="Save"]'),
-  ];
-
-  await page.goto(normalizeMapsUrl(row.url), {
-    waitUntil: "domcontentloaded",
-    timeout: 45000,
-  });
-  await page.waitForTimeout(3500);
-
-  const saveButton = await findFirstVisible(page, saveButtonCandidates, "Save button");
-  await saveButton.click({ timeout: 10000 });
-
-  const listItem = await findListItem(page, row.listName);
-  if (!listItem) {
-    throw new Error(
-      `could not find list ${row.listName} (looked for ${truncateListName(row.listName)})`
-    );
-  }
-
-  const checked = await listItem.getAttribute("aria-checked").catch(() => null);
-  if (checked === "false") {
-    console.log(`already removed: ${row.name} -> ${row.listName}`);
-    await page.keyboard.press("Escape").catch(() => {});
-    return { googleUrl: pageUrl(page), removed: false };
-  }
-  if (checked !== "true") {
-    throw new Error(
-      `could not determine whether ${row.name} is saved in ${row.listName}`
-    );
-  }
-
-  await listItem.click({ timeout: 10000 });
-  await page.waitForTimeout(1000);
-  const unchecked = await listItem.getAttribute("aria-checked").catch(() => null);
+async function removePlace(page, row, maxDistanceM) {
+  const candidates = saveButtonCandidates(page);
+  const exactPlaceReference = placeReferenceFromUrl(normalizeMapsUrl(row.url));
+  const verificationOptions =
+    exactPlaceReference && !sourceCoordinates(row) && !row.address?.trim()
+      ? { allowNameMismatchWithoutLocation: true }
+      : {};
+  const resolved = await resolvePlace(
+    page,
+    row,
+    maxDistanceM,
+    candidates,
+    {
+      verificationOptions,
+      expectedReference: exactPlaceReference,
+    }
+  );
+  const membership = await setListChecked(
+    page,
+    row.listName,
+    false,
+    candidates
+  );
   await page.keyboard.press("Escape").catch(() => {});
-  if (unchecked === "true") {
-    throw new Error(`could not remove ${row.name} from ${row.listName}`);
+  if (!membership.changed) {
+    console.log(`already removed: ${row.name} -> ${row.listName}`);
+  } else {
+    console.log(`removed: ${row.name} -> ${row.listName}`);
   }
-
-  console.log(`removed: ${row.name} -> ${row.listName}`);
-  return { googleUrl: pageUrl(page), removed: true };
+  return {
+    googleUrl: resolved.verifiedPlace.googleUrl,
+    removed: membership.changed,
+  };
 }
 
 const options = getopts(process.argv.slice(2), {
@@ -885,8 +1152,8 @@ const options = getopts(process.argv.slice(2), {
   },
   default: {
     checkpoint: checkpointDefault,
-    delayMs: 2500,
-    maxDistanceM: 1000,
+    delayMs: rowDelayMsDefault,
+    maxDistanceM: maxDistanceMDefault,
     noteTimeoutMs: noteTimeoutMsDefault,
   },
 });
@@ -977,7 +1244,7 @@ try {
 
     try {
       const result = options.remove
-        ? await removePlace(browser.page, row)
+        ? await removePlace(browser.page, row, maxDistanceM)
         : await savePlace(browser.page, row, maxDistanceM, noteTimeoutMs);
 
       const key = placeKey(row);
@@ -1018,6 +1285,8 @@ try {
         error: errorDetails(error),
         screenshot: screenshot.path,
         googleUrl: failedGoogleUrl,
+        ...(error.cleanup ? { cleanup: error.cleanup } : {}),
+        ...(error.cleanupError ? { cleanupError: error.cleanupError } : {}),
         maxDistanceM,
         noteTimeoutMs,
       });
