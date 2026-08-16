@@ -34,7 +34,7 @@ const checkpointDefault = ".playwright/gmaps-save-checkpoint.json";
 const screenshotDir = "output/playwright";
 const browserReopenAttempts = 3;
 const browserReopenDelayMs = 500;
-const rowDelayMsDefault = 1000;
+const rowDelayMsDefault = 250;
 const noteTimeoutMsDefault = 60000;
 const placeRetryableErrorCodes = new Set([
   errorCodes.placeUnresolved,
@@ -47,7 +47,7 @@ const placeRetryableErrorCodes = new Set([
 function usage() {
   return [
     "usage: npm run gmaps:save-list -- places.csv [--list-name name] [--limit 20]",
-    "       [--checkpoint path] [--continue-on-error] [--delay-ms 1000]",
+    "       [--checkpoint path] [--continue-on-error] [--delay-ms 250]",
     "       [--max-distance-m 100] [--note-timeout-ms 60000]",
     "       [--retry-failed] [--remove] [--dry-run]",
     "",

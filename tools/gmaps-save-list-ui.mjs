@@ -13,10 +13,10 @@ import {
 import { errorCodes, runnerError, unresolvedPlaceError } from "./gmaps-errors.mjs";
 
 const googleListNameMaxLength = 40;
-const actionSettleMs = 500;
-const navigationSettleMs = 2500;
+const actionSettleMs = 250;
 const pollIntervalMs = 250;
-const resultSettleMs = 750;
+const resultPollIntervalMs = 100;
+const resultSettleMs = 300;
 const savedListItemSelector =
   '[role="menuitemradio"], [role="menuitemcheckbox"], [role="checkbox"]';
 
@@ -264,7 +264,18 @@ export async function openMapsUrl(page, url) {
       `could not navigate to Google Maps: ${error.message}`
     );
   }
-  await page.waitForTimeout(navigationSettleMs);
+}
+
+async function waitForPlaceDetails(page, timeoutMs = 10000) {
+  const details = [
+    () => page.locator('[data-item-id="title"]'),
+    () => page.locator('[data-item-id="address"]'),
+    ...saveButtonCandidates(page),
+  ];
+
+  try {
+    await findFirstVisible(page, details, "place details", timeoutMs);
+  } catch {}
 }
 
 async function findSearchResult(
@@ -276,28 +287,45 @@ async function findSearchResult(
   const deadline = Date.now() + timeoutMs;
   let candidatesFoundAt = null;
   let candidateKeys = null;
+  const expectedCoordinates = sourceCoordinates(row);
 
   while (Date.now() < deadline) {
     // A search can become a place page without exposing a matching result link.
     if (placeReferenceFromUrl(page.url())) return null;
 
     const resultLinks = page.locator('a[href*="/maps/place/"]');
-    const candidates = new Map();
-    for (let index = 0; index < (await resultLinks.count()); index += 1) {
-      const resultLink = resultLinks.nth(index);
-      if (!(await resultLink.isVisible().catch(() => false))) continue;
+    const resultEntries = await resultLinks.evaluateAll((links) =>
+      links
+        .map((link, index) => {
+          const rectangle = link.getBoundingClientRect();
+          const style = window.getComputedStyle(link);
+          if (
+            style.display === "none" ||
+            style.visibility === "hidden" ||
+            rectangle.width === 0 ||
+            rectangle.height === 0
+          ) {
+            return null;
+          }
 
-      const label = (await resultLink.getAttribute("aria-label")) ?? "";
-      const linkText = await resultLink.innerText().catch(() => "");
-      const resultCard = resultLink
-        .locator("xpath=ancestor::article[1]")
-        .first();
-      const cardText = await resultCard.innerText().catch(() => "");
+          const resultCard = link.closest("article");
+          return {
+            index,
+            label: link.getAttribute("aria-label") ?? "",
+            linkText: link.innerText ?? "",
+            cardText: resultCard?.innerText ?? "",
+            href: link.getAttribute("href"),
+          };
+        })
+        .filter(Boolean)
+    );
+    const candidates = new Map();
+    for (const entry of resultEntries) {
+      const resultLink = resultLinks.nth(entry.index);
+      const { label, linkText, cardText, href } = entry;
       const resultText = `${label} ${linkText} ${cardText}`;
       const resultName = label || linkText || cardText.split(/\r?\n/)[0];
-      const href = await resultLink.getAttribute("href");
       const reference = placeReferenceFromUrl(href);
-      const expectedCoordinates = sourceCoordinates(row);
       const distanceM =
         expectedCoordinates && reference?.coordinates
           ? distanceInMeters(expectedCoordinates, reference.coordinates)
@@ -352,7 +380,7 @@ async function findSearchResult(
 
     candidatesFoundAt ??= Date.now();
     if (Date.now() - candidatesFoundAt < resultSettleMs) {
-      await sleep(pollIntervalMs);
+      await sleep(resultPollIntervalMs);
       continue;
     }
 
@@ -436,7 +464,7 @@ export async function selectPlaceCandidate(
     if (result) {
       referenceUrl = await result.getAttribute("href");
       await result.click({ timeout: 10000 });
-      await page.waitForTimeout(navigationSettleMs);
+      await waitForPlaceDetails(page);
     } else {
       // Google can redirect to an alternate-name place while the result wait runs.
       const selectedUrl = page.url();
