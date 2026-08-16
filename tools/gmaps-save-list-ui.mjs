@@ -4,6 +4,7 @@ import {
   addressesMatch,
   distanceInMeters,
   hasSourceLocation,
+  maxDistanceMDefault,
   placeNamesMatch,
   placeReferenceFromUrl,
   placesMatch,
@@ -15,6 +16,7 @@ const googleListNameMaxLength = 40;
 const actionSettleMs = 500;
 const navigationSettleMs = 2500;
 const pollIntervalMs = 250;
+const resultSettleMs = 750;
 const savedListItemSelector =
   '[role="menuitemradio"], [role="menuitemcheckbox"], [role="checkbox"]';
 
@@ -69,24 +71,31 @@ async function clickOptional(candidates) {
 }
 
 async function findPlaceName(page, timeoutMs = 10000) {
-  const nameCandidates = [
-    () => page.locator("h1"),
-    () => page.locator('[data-item-id="title"]'),
-  ];
+  const placeTitle = page.locator('[data-item-id="title"]').first();
+  if (await placeTitle.isVisible().catch(() => false)) {
+    const name = (await placeTitle.innerText().catch(() => "")).trim();
+    if (name) return name;
+  }
 
-  let nameLocator;
+  const heading = page.locator("h1").first();
   try {
-    nameLocator = await findFirstVisible(
-      page,
-      nameCandidates,
-      "place name",
-      timeoutMs
-    );
+    await heading.waitFor({ state: "visible", timeout: timeoutMs });
   } catch {
     return null;
   }
 
-  const name = (await nameLocator.innerText().catch(() => "")).trim();
+  const headingName = (await heading.innerText().catch(() => "")).trim();
+  if (!/^results?$/i.test(headingName)) return headingName || null;
+
+  // On the split search/preview layout, the h1 belongs to the results pane.
+  // Wait for the title belonging to the place preview instead of returning
+  // the generic results heading as the place name.
+  try {
+    await placeTitle.waitFor({ state: "visible", timeout: timeoutMs });
+  } catch {
+    return null;
+  }
+  const name = (await placeTitle.innerText().catch(() => "")).trim();
   return name || null;
 }
 
@@ -258,30 +267,164 @@ export async function openMapsUrl(page, url) {
   await page.waitForTimeout(navigationSettleMs);
 }
 
-async function findSearchResult(page, name, timeoutMs = 15000) {
-  const searchName = name.split(",", 1)[0].trim().toLocaleLowerCase();
+async function findSearchResult(
+  page,
+  row,
+  maxDistanceM = maxDistanceMDefault,
+  timeoutMs = 15000
+) {
   const deadline = Date.now() + timeoutMs;
+  let candidatesFoundAt = null;
+  let candidateKeys = null;
 
   while (Date.now() < deadline) {
     // A search can become a place page without exposing a matching result link.
     if (placeReferenceFromUrl(page.url())) return null;
 
     const resultLinks = page.locator('a[href*="/maps/place/"]');
+    const candidates = new Map();
     for (let index = 0; index < (await resultLinks.count()); index += 1) {
       const resultLink = resultLinks.nth(index);
       if (!(await resultLink.isVisible().catch(() => false))) continue;
+
       const label = (await resultLink.getAttribute("aria-label")) ?? "";
-      const text = await resultLink.innerText().catch(() => "");
-      const resultText = `${label} ${text}`.toLocaleLowerCase();
-      if (resultText.includes(searchName)) return resultLink;
+      const linkText = await resultLink.innerText().catch(() => "");
+      const resultCard = resultLink
+        .locator("xpath=ancestor::article[1]")
+        .first();
+      const cardText = await resultCard.innerText().catch(() => "");
+      const resultText = `${label} ${linkText} ${cardText}`;
+      const resultName = label || linkText || cardText.split(/\r?\n/)[0];
+      const href = await resultLink.getAttribute("href");
+      const reference = placeReferenceFromUrl(href);
+      const expectedCoordinates = sourceCoordinates(row);
+      const distanceM =
+        expectedCoordinates && reference?.coordinates
+          ? distanceInMeters(expectedCoordinates, reference.coordinates)
+          : null;
+      const coordinateMatch =
+        distanceM !== null && distanceM <= maxDistanceM;
+      const addressMatch = Boolean(
+        row.address?.trim() && addressesMatch(row.address, resultText)
+      );
+      const nameMatch = placeNamesMatch(row.name, resultName);
+      if (!coordinateMatch && !addressMatch && !nameMatch) continue;
+
+      const key = reference?.placeId || reference?.path || href;
+      const score =
+        (coordinateMatch ? 1000 : 0) +
+        (addressMatch ? 100 : 0) +
+        (nameMatch ? 10 : 0) -
+        (distanceM === null ? 0 : Math.min(distanceM, 100_000) / 1000);
+      const candidate = {
+        resultLink,
+        href,
+        name: resultName,
+        reference,
+        distanceM,
+        coordinateMatch,
+        addressMatch,
+        nameMatch,
+        score,
+      };
+      const previous = candidates.get(key);
+      if (!previous || score > previous.score) {
+        candidates.set(key, candidate);
+      }
     }
-    await sleep(pollIntervalMs);
+
+    const distinctCandidates = [...candidates.values()];
+    if (distinctCandidates.length === 0) {
+      candidatesFoundAt = null;
+      candidateKeys = null;
+      await sleep(pollIntervalMs);
+      continue;
+    }
+
+    const nextCandidateKeys = distinctCandidates
+      .map((candidate) => candidate.reference?.placeId || candidate.href)
+      .sort()
+      .join("\n");
+    if (nextCandidateKeys !== candidateKeys) {
+      candidateKeys = nextCandidateKeys;
+      candidatesFoundAt = Date.now();
+    }
+
+    candidatesFoundAt ??= Date.now();
+    if (Date.now() - candidatesFoundAt < resultSettleMs) {
+      await sleep(pollIntervalMs);
+      continue;
+    }
+
+    const locationCandidates = distinctCandidates.filter(
+      (candidate) => candidate.coordinateMatch || candidate.addressMatch
+    );
+    const locationNameMatches = locationCandidates.filter(
+      (candidate) => candidate.nameMatch
+    );
+    if (locationNameMatches.length === 1) {
+      return locationNameMatches[0].resultLink;
+    }
+    if (locationCandidates.length === 1) {
+      return locationCandidates[0].resultLink;
+    }
+    if (locationCandidates.length > 1) {
+      throw ambiguousSearchResultsError(row, locationCandidates);
+    }
+
+    const nameMatches = distinctCandidates.filter(
+      (candidate) => candidate.nameMatch
+    );
+    if (nameMatches.length === 1) {
+      return nameMatches[0].resultLink;
+    }
+    if (nameMatches.length > 1) {
+      throw ambiguousSearchResultsError(row, nameMatches);
+    }
+
+    return distinctCandidates[0].resultLink;
   }
 
   return null;
 }
 
-export async function selectPlaceCandidate(page, row, searchUrl) {
+function formatResultCandidate(candidate) {
+  const distance =
+    candidate.distanceM === null
+      ? "no coordinate distance"
+      : `${Math.round(candidate.distanceM)}m`;
+  const evidence = [
+    distance,
+    candidate.addressMatch ? "address" : null,
+    candidate.nameMatch ? "name" : null,
+  ].filter(Boolean);
+  return `${JSON.stringify(candidate.name)} (${evidence.join(", ")})`;
+}
+
+function ambiguousSearchResultsError(row, candidates) {
+  return runnerError(
+    errorCodes.placeAmbiguous,
+    `ambiguous Google Maps results for ${row.name}: ${candidates
+      .map((candidate) => formatResultCandidate(candidate))
+      .join("; ")}`,
+    {
+      candidates: candidates.map((candidate) => ({
+        name: candidate.name,
+        href: candidate.href,
+        distanceM: candidate.distanceM,
+        addressMatch: candidate.addressMatch,
+        nameMatch: candidate.nameMatch,
+      })),
+    }
+  );
+}
+
+export async function selectPlaceCandidate(
+  page,
+  row,
+  searchUrl,
+  maxDistanceM = maxDistanceMDefault
+) {
   await openMapsUrl(page, searchUrl);
 
   const initialUrl = page.url();
@@ -289,7 +432,7 @@ export async function selectPlaceCandidate(page, row, searchUrl) {
   let referenceUrl = initialReference ? initialUrl : null;
 
   if (!initialReference) {
-    const result = await findSearchResult(page, row.name);
+    const result = await findSearchResult(page, row, maxDistanceM);
     if (result) {
       referenceUrl = await result.getAttribute("href");
       await result.click({ timeout: 10000 });
@@ -448,7 +591,38 @@ async function setListChecked(page, listName, desiredChecked) {
   const deadline = Date.now() + 15000;
   let finalChecked;
   while (Date.now() < deadline) {
-    const finalListItem = await ensureListPickerOpen(page, listName);
+    // Google Maps sometimes closes the list picker after saving a list and
+    // expands the saved-list card instead. The visible card is the membership
+    // confirmation, even though the checkbox is no longer in the DOM.
+    if (
+      desiredChecked &&
+      (await savedListGroup(page, listName).isVisible().catch(() => false))
+    ) {
+      return { initiallyChecked, changed: true };
+    }
+
+    // Do not reopen the picker while waiting for a newly saved card. Reopening
+    // can race with Google's transition from the picker to the place details.
+    const finalListItem = await findListItem(page, listName, 250);
+    if (!finalListItem) {
+      if (desiredChecked) {
+        await sleep(pollIntervalMs);
+        continue;
+      }
+
+      // Removing a list normally keeps the picker open. If Google closed it,
+      // reopen it before checking that the removal completed.
+      const reopenedListItem = await ensureListPickerOpen(page, listName);
+      finalChecked = await reopenedListItem
+        .getAttribute("aria-checked")
+        .catch(() => null);
+      if (finalChecked === String(desiredChecked)) {
+        return { initiallyChecked, changed: true };
+      }
+      await sleep(pollIntervalMs);
+      continue;
+    }
+
     finalChecked = await finalListItem
       .getAttribute("aria-checked")
       .catch(() => null);
@@ -521,15 +695,20 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export async function addNoteIfPossible(page, listName, note, noteTimeoutMs) {
-  if (!note) return;
-
+function savedListGroup(page, listName) {
   const visibleListName = truncateListName(listName);
-  const listGroup = page
+  return page
     .getByRole("group", {
       name: new RegExp(`^Saved in ${escapeRegExp(visibleListName)}$`, "i"),
     })
     .first();
+}
+
+export async function addNoteIfPossible(page, listName, note, noteTimeoutMs) {
+  if (!note) return;
+
+  const visibleListName = truncateListName(listName);
+  const listGroup = savedListGroup(page, listName);
   const textarea = listGroup
     .locator('textarea[aria-label="Add note"], textarea[aria-label="Edit note"]')
     .first();

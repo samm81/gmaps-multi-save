@@ -241,7 +241,8 @@ async function resolveAttempt(
   const candidate = await selectPlaceCandidate(
     page,
     row,
-    searchAttempt.url
+    searchAttempt.url,
+    maxDistanceM
   );
   const verifiedPlace = await verifyPlaceLocation(
     page,

@@ -1,5 +1,6 @@
 export const errorCodes = Object.freeze({
   placeUnresolved: "PLACE_UNRESOLVED",
+  placeAmbiguous: "PLACE_AMBIGUOUS",
   placeUnverified: "PLACE_UNVERIFIED",
   locationUnverified: "LOCATION_UNVERIFIED",
   navigationUnavailable: "NAVIGATION_UNAVAILABLE",
