@@ -141,6 +141,7 @@ function main() {
           Description: note,
           Address: address,
           Location: location,
+          Url: michelinUrl,
         }) => ({
           name,
           lon,
@@ -149,20 +150,24 @@ function main() {
           note,
           address,
           location,
+          michelinUrl,
         })
       )
     )
     .pipe(
-      transform(({ name, lon, lat, award, note, address, location }) => ({
-        name,
-        url: makeGmapsSearchUrl(name, lat, lon),
-        note,
-        listName: awardToRegionalListName(award, location, options.splitRegions),
-        address,
-        location,
-        latitude: lat,
-        longitude: lon,
-      }))
+      transform(
+        ({ name, lon, lat, award, note, address, location, michelinUrl }) => ({
+          name,
+          url: makeGmapsSearchUrl(name, lat, lon),
+          michelinUrl,
+          note,
+          listName: awardToRegionalListName(award, location, options.splitRegions),
+          address,
+          location,
+          latitude: lat,
+          longitude: lon,
+        })
+      )
     )
     .pipe(stringify({ header: true }))
     .pipe(outFileStream);

@@ -9,7 +9,7 @@ The active workflow uses a normal headed browser controlled by Playwright. The f
 
 ## Playwright saved-list import
 
-This workflow uses CSV files with the columns `name,url,note,listName` and optional source metadata: `address`, `location`, `latitude`, and `longitude`.
+This workflow uses CSV files with the columns `name,url,note,listName` and optional source metadata: `michelinUrl`, `address`, `location`, `latitude`, and `longitude`.
 
 First, create the dedicated local browser profile and sign in manually. The login command opens the installed browser directly because Google may reject automated sign-in:
 
@@ -62,7 +62,7 @@ To reverse the full regional file, run `make build/michelin-regional-reversed.cs
 
 To omit Mainland China, generate `build/michelin-regional--no-china.csv`. To process that file from the end first, generate `build/michelin-regional--no-china--reversed.csv`; its Bib Gourmand rows come first.
 
-The generated Michelin rows retain the source address and coordinates. The Playwright runner selects a matching Google Maps result before looking for the Save control, then verifies the place location again after Save opens the list picker and immediately before selecting the list. By default, it only saves a place resolved within 100 meters of the Michelin coordinates; when Google keeps the browser on a search URL, it checks the visible place address instead. A different displayed place name is accepted when the coordinates or address verify the source location. When an address is available, it first searches for the Michelin name with the source address appended, then retries with the name alone if it cannot find or verify a place. Rows that do not pass location verification, including results over 100 meters away, are recorded as failures and are not marked complete for manual review. Successful checkpoint entries include the verified place identity. Adjust the coordinate tolerance with `--max-distance-m 50` (or another positive distance in meters).
+The generated Michelin rows retain the Michelin page URL, source address, and coordinates. The Playwright runner selects a matching Google Maps result before looking for the Save control, then verifies the place location again after Save opens the list picker and immediately before selecting the list. By default, it only saves a place resolved within 100 meters of the Michelin coordinates; when Google keeps the browser on a search URL, it checks the visible place address instead. A different displayed place name is accepted when the coordinates or address verify the source location. When an address is available, it first searches for the Michelin name with the source address appended, then retries with the name alone if it cannot find or verify a place. Rows that do not pass location verification, including results over 100 meters away, are recorded as failures and are not marked complete for manual review. Successful checkpoint entries include the verified place identity. Adjust the coordinate tolerance with `--max-distance-m 50` (or another positive distance in meters).
 
 After creating those lists in Google Maps, run:
 
