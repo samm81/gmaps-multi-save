@@ -6,6 +6,8 @@ import {
   hasSourceLocation,
   maxDistanceMDefault,
   placeNamesMatch,
+  placeNamesExactlyMatch,
+  placeNameFromUrl,
   placeReferenceFromUrl,
   placesMatch,
   sourceCoordinates,
@@ -70,7 +72,12 @@ async function clickOptional(candidates) {
   return false;
 }
 
-async function findPlaceName(page, timeoutMs = 10000) {
+async function findPlaceName(
+  page,
+  timeoutMs = 10000,
+  expectedPlace = false,
+  fallbackUrl = null
+) {
   const placeTitle = page.locator('[data-item-id="title"]').first();
   if (await placeTitle.isVisible().catch(() => false)) {
     const name = (await placeTitle.innerText().catch(() => "")).trim();
@@ -85,6 +92,20 @@ async function findPlaceName(page, timeoutMs = 10000) {
   }
 
   const headingName = (await heading.innerText().catch(() => "")).trim();
+  if (expectedPlace) {
+    try {
+      await placeTitle.waitFor({ state: "visible", timeout: 3000 });
+      const placeName = (await placeTitle.innerText().catch(() => "")).trim();
+      if (placeName) return placeName;
+      if (expectedPlace) {
+        return placeNameFromUrl(page.url()) ?? placeNameFromUrl(fallbackUrl);
+      }
+    } catch {
+      if (expectedPlace) {
+        return placeNameFromUrl(page.url()) ?? placeNameFromUrl(fallbackUrl);
+      }
+    }
+  }
   if (!/^results?$/i.test(headingName)) return headingName || null;
 
   // On the split search/preview layout, the h1 belongs to the results pane.
@@ -128,9 +149,14 @@ export async function capturePlaceIdentity(
   maxDistanceM,
   fallbackUrl = null
 ) {
-  const currentUrl = page.url();
-  const currentReference = placeReferenceFromUrl(currentUrl);
+  let currentUrl = page.url();
+  let currentReference = placeReferenceFromUrl(currentUrl);
   const fallbackReference = placeReferenceFromUrl(fallbackUrl);
+  if (!currentReference && fallbackReference) {
+    await openMapsUrl(page, absoluteMapsUrl(fallbackUrl));
+    currentUrl = page.url();
+    currentReference = placeReferenceFromUrl(currentUrl);
+  }
   if (
     currentReference &&
     fallbackReference &&
@@ -148,7 +174,12 @@ export async function capturePlaceIdentity(
     googleUrl: currentReference
       ? currentUrl
       : absoluteMapsUrl(fallbackUrl) ?? currentUrl,
-    name: await findPlaceName(page),
+    name: await findPlaceName(
+      page,
+      10000,
+      Boolean(fallbackReference),
+      fallbackUrl
+    ),
     address: await findPlaceAddress(page, 3000),
     placeId: reference?.placeId ?? null,
     path: reference?.path ?? null,
@@ -161,9 +192,9 @@ async function verifyPlaceLocationData(
   row,
   identity,
   maxDistanceM,
-  { requireSourceLocation = false } = {}
+  { expectedCoordinates = null, requireSourceLocation = false } = {}
 ) {
-  const expected = sourceCoordinates(row);
+  const expected = expectedCoordinates ?? sourceCoordinates(row);
   if (!expected) {
     if (row.address?.trim() && identity.address) {
       if (!addressesMatch(row.address, identity.address)) {
@@ -226,6 +257,7 @@ export async function verifyPlaceLocation(
   maxDistanceM,
   fallbackUrl = null,
   {
+    expectedCoordinates = null,
     requireSourceLocation = false,
     allowNameMismatchWithoutLocation = false,
   } = {}
@@ -238,6 +270,7 @@ export async function verifyPlaceLocation(
     identity,
     maxDistanceM,
     {
+      expectedCoordinates,
       requireSourceLocation:
         requireSourceLocation ||
         (!nameMatches && !allowNameMismatchWithoutLocation),
@@ -336,13 +369,14 @@ async function findSearchResult(
         row.address?.trim() && addressesMatch(row.address, resultText)
       );
       const nameMatch = placeNamesMatch(row.name, resultName);
+      const exactNameMatch = placeNamesExactlyMatch(row.name, resultName);
       if (!coordinateMatch && !addressMatch && !nameMatch) continue;
 
       const key = reference?.placeId || reference?.path || href;
       const score =
         (coordinateMatch ? 1000 : 0) +
         (addressMatch ? 100 : 0) +
-        (nameMatch ? 10 : 0) -
+        (exactNameMatch ? 20 : nameMatch ? 10 : 0) -
         (distanceM === null ? 0 : Math.min(distanceM, 100_000) / 1000);
       const candidate = {
         resultLink,
@@ -353,6 +387,7 @@ async function findSearchResult(
         coordinateMatch,
         addressMatch,
         nameMatch,
+        exactNameMatch,
         score,
       };
       const previous = candidates.get(key);
@@ -387,6 +422,12 @@ async function findSearchResult(
     const locationCandidates = distinctCandidates.filter(
       (candidate) => candidate.coordinateMatch || candidate.addressMatch
     );
+    const exactLocationNameMatches = locationCandidates.filter(
+      (candidate) => candidate.exactNameMatch
+    );
+    if (exactLocationNameMatches.length === 1) {
+      return exactLocationNameMatches[0].resultLink;
+    }
     const locationNameMatches = locationCandidates.filter(
       (candidate) => candidate.nameMatch
     );
@@ -506,41 +547,76 @@ export async function findSaveButton(page) {
 
 async function findListItem(page, listName, timeoutMs = 15000) {
   const visibleListName = truncateListName(listName);
-  const candidates = page.locator(savedListItemSelector);
+  const candidates = page
+    .getByRole("menu", { name: /^Save in your lists$/i })
+    .locator(savedListItemSelector);
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
     for (let index = 0; index < (await candidates.count()); index += 1) {
       const locator = candidates.nth(index);
-      if (!(await locator.isVisible().catch(() => false))) continue;
-
       const text = await locator.innerText().catch(() => "");
       const lines = text
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter(Boolean);
       const normalizedText = text.replace(/\s+/g, " ").trim();
-      if (
+      const matches =
         lines.includes(visibleListName) ||
         normalizedText === visibleListName ||
-        normalizedText.startsWith(`${visibleListName} `)
-      ) {
-        return locator;
-      }
+        normalizedText.startsWith(`${visibleListName} `);
+      if (!matches) continue;
+
+      await locator.scrollIntoViewIfNeeded({ timeout: 1000 }).catch(() => {});
+      if (await locator.isVisible().catch(() => false)) return locator;
     }
 
-    await sleep(pollIntervalMs);
+    const moved = await scrollVisibleListItems(candidates);
+    if (!moved) await sleep(pollIntervalMs);
   }
 
   return null;
 }
 
-async function listPickerIsOpen(page) {
-  const listItems = page.locator(savedListItemSelector);
-  for (let index = 0; index < (await listItems.count()); index += 1) {
-    if (await listItems.nth(index).isVisible().catch(() => false)) return true;
+// Google Maps may virtualize list-picker items below the visible viewport.
+async function scrollVisibleListItems(candidates) {
+  for (let index = (await candidates.count()) - 1; index >= 0; index -= 1) {
+    const locator = candidates.nth(index);
+    if (!(await locator.isVisible().catch(() => false))) continue;
+
+    const text = await locator.innerText().catch(() => "");
+    if (!/^michelin-/im.test(text)) continue;
+
+    const moved = await locator
+      .evaluate((element) => {
+        let ancestor = element.parentElement;
+        while (ancestor) {
+          const canScroll = ancestor.scrollHeight > ancestor.clientHeight + 1;
+          if (canScroll) {
+            const previousTop = ancestor.scrollTop;
+            const distance = Math.max(ancestor.clientHeight * 0.8, 200);
+            ancestor.scrollTop = Math.min(
+              previousTop + distance,
+              ancestor.scrollHeight - ancestor.clientHeight
+            );
+            return ancestor.scrollTop > previousTop;
+          }
+          ancestor = ancestor.parentElement;
+        }
+        return false;
+      })
+      .catch(() => false);
+    if (moved) return true;
   }
+
   return false;
+}
+
+async function listPickerIsOpen(page) {
+  return await page
+    .getByRole("menu", { name: /^Save in your lists$/i })
+    .isVisible()
+    .catch(() => false);
 }
 
 async function ensureListPickerOpen(page, listName) {
@@ -554,7 +630,18 @@ async function ensureListPickerOpen(page, listName) {
       saveButtonCandidates(page),
       "Save button"
     );
-    await saveButton.click({ timeout: 10000 });
+    try {
+      await saveButton.click({ timeout: 10000 });
+    } catch (error) {
+      // Google sometimes leaves search suggestions above the place pane.
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(pollIntervalMs);
+      try {
+        await saveButton.click({ timeout: 10000, force: true });
+      } catch {
+        throw error;
+      }
+    }
   }
 
   const listItem = await findListItem(page, listName);
@@ -565,42 +652,6 @@ async function ensureListPickerOpen(page, listName) {
     );
   }
   return listItem;
-}
-
-async function findVisibleMichelinListNames(page) {
-  const listItems = page.locator(savedListItemSelector);
-  const names = new Set();
-
-  for (let index = 0; index < (await listItems.count()); index += 1) {
-    const listItem = listItems.nth(index);
-    if (!(await listItem.isVisible().catch(() => false))) continue;
-
-    const lines = (await listItem.innerText().catch(() => ""))
-      .split(/\r?\n/)
-      .map((line) => line.trim());
-    const listName = lines
-      .map((line) => line.match(/^(michelin-\S+)/i)?.[1])
-      .find(Boolean);
-    if (listName) names.add(listName);
-  }
-
-  return [...names];
-}
-
-async function getCheckedMichelinListNames(page, targetListName) {
-  const visibleListNames = await findVisibleMichelinListNames(page);
-  const checkedListNames = [];
-  for (const listName of visibleListNames) {
-    if (listName.toLocaleLowerCase() === targetListName.toLocaleLowerCase()) {
-      continue;
-    }
-
-    const listItem = await findListItem(page, listName, 3000);
-    if (!listItem) continue;
-    const checked = await listItem.getAttribute("aria-checked").catch(() => null);
-    if (checked === "true") checkedListNames.push(listName);
-  }
-  return checkedListNames;
 }
 
 async function setListChecked(page, listName, desiredChecked) {
@@ -668,55 +719,6 @@ async function setListChecked(page, listName, desiredChecked) {
 
 export async function setListMembership(page, listName, desiredChecked) {
   return setListChecked(page, listName, desiredChecked);
-}
-
-export async function correctMichelinListMembership(page, row) {
-  const targetListName = truncateListName(row.listName);
-  const movedFrom = [];
-  const targetListItem = await ensureListPickerOpen(page, row.listName);
-  const initiallyChecked =
-    (await targetListItem.getAttribute("aria-checked").catch(() => null)) ===
-    "true";
-
-  if (!/^michelin-/i.test(row.listName)) {
-    await setListChecked(page, row.listName, true);
-    return { initiallyChecked, movedFrom };
-  }
-
-  const checkedMichelinListNames = await getCheckedMichelinListNames(
-    page,
-    targetListName
-  );
-  for (const listName of checkedMichelinListNames) {
-    console.log(`moving ${row.name}: ${listName} -> ${targetListName}`);
-    await setListChecked(page, listName, false);
-    movedFrom.push(listName);
-  }
-
-  await setListChecked(page, row.listName, true);
-  return { initiallyChecked, movedFrom };
-}
-
-export async function removeWrongMichelinMemberships(page, row) {
-  if (!/^michelin-/i.test(row.listName)) {
-    return { removedFrom: [] };
-  }
-
-  const targetListName = truncateListName(row.listName);
-  await ensureListPickerOpen(page, row.listName);
-  const checkedWrongListNames = await getCheckedMichelinListNames(
-    page,
-    targetListName
-  );
-  const removedFrom = [];
-  for (const listName of checkedWrongListNames) {
-    console.log(`removing wrong saved list: ${row.name} -> ${listName}`);
-    await setListChecked(page, listName, false);
-    removedFrom.push(listName);
-  }
-
-  await page.keyboard.press("Escape").catch(() => {});
-  return { removedFrom };
 }
 
 function escapeRegExp(value) {

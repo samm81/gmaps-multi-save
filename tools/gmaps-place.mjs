@@ -1,6 +1,6 @@
 import { normalizeMapsUrl } from "./gmaps-playwright.mjs";
 
-export const maxDistanceMDefault = 100;
+export const maxDistanceMDefault = 1_000;
 
 export function sourceCoordinates(row) {
   if (
@@ -204,6 +204,24 @@ export function placeReferenceFromUrl(url) {
   return { placeId, coordinates, path };
 }
 
+export function placeNameFromUrl(url) {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(url, "https://www.google.com");
+  } catch {
+    return null;
+  }
+
+  const match = parsedUrl.pathname.match(/^\/maps\/place\/([^/]+)/);
+  if (!match) return null;
+
+  try {
+    return decodeURIComponent(match[1].replace(/\+/g, " ")) || null;
+  } catch {
+    return match[1] || null;
+  }
+}
+
 export function placesMatch(first, second, maxDistanceM = maxDistanceMDefault) {
   if (!first || !second) return false;
   if (first.placeId && second.placeId) return first.placeId === second.placeId;
@@ -226,7 +244,14 @@ function normalizedPlaceName(name) {
     .trim();
 }
 
+export function placeNamesExactlyMatch(expectedName, actualName) {
+  const expected = normalizedPlaceName(expectedName?.split(",", 1)[0]);
+  const actual = normalizedPlaceName(actualName);
+  return Boolean(expected && actual && expected === actual);
+}
+
 export function placeNamesMatch(expectedName, actualName) {
+  if (placeNamesExactlyMatch(expectedName, actualName)) return true;
   const expected = normalizedPlaceName(expectedName?.split(",", 1)[0]);
   const actual = normalizedPlaceName(actualName);
   if (!expected || !actual) return false;

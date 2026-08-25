@@ -7,6 +7,8 @@ import {
   normalizeMapsUrl,
   sleep,
 } from "./gmaps-playwright.mjs";
+import { makeGmapsSearchUrl } from "./gmaps-url.mjs";
+import { findMichelinMapCoordinates } from "./michelin-page.mjs";
 import {
   hasSourceLocation,
   maxDistanceMDefault,
@@ -21,10 +23,7 @@ import {
 } from "./gmaps-errors.mjs";
 import {
   addNoteIfPossible,
-  correctMichelinListMembership,
   findSaveButton,
-  openMapsUrl,
-  removeWrongMichelinMemberships,
   selectPlaceCandidate,
   setListMembership,
   verifyPlaceLocation,
@@ -38,20 +37,27 @@ const rowDelayMsDefault = 250;
 const noteTimeoutMsDefault = 60000;
 const placeRetryableErrorCodes = new Set([
   errorCodes.placeUnresolved,
+  errorCodes.placeAmbiguous,
   errorCodes.placeUnverified,
   errorCodes.locationUnverified,
   errorCodes.saveUnavailable,
   errorCodes.navigationUnavailable,
+]);
+const michelinFallbackErrorCodes = new Set([
+  errorCodes.placeUnresolved,
+  errorCodes.placeAmbiguous,
+  errorCodes.placeUnverified,
+  errorCodes.locationUnverified,
 ]);
 
 function usage() {
   return [
     "usage: npm run gmaps:save-list -- places.csv [--list-name name] [--limit 20]",
     "       [--checkpoint path] [--continue-on-error] [--delay-ms 250]",
-    "       [--max-distance-m 100] [--note-timeout-ms 60000]",
-    "       [--retry-failed] [--remove] [--dry-run]",
+    "       [--max-distance-m 1000] [--note-timeout-ms 60000]",
+    "       [--address-only] [--retry-failed] [--remove] [--dry-run]",
     "",
-    "CSV columns: name,url,note,listName; optional source metadata: address,location,latitude,longitude",
+    "CSV columns: name,url,note,listName; optional source metadata: michelinUrl,address,location,latitude,longitude",
     "Each row resolves and verifies one Google Maps place before changing saved lists.",
     "Google Maps list-name lookups use the first 40 characters.",
     "Rerunning the same command skips rows already attempted; use --retry-failed to retry failures.",
@@ -98,6 +104,7 @@ function recordAttempt(checkpoint, row, status, details = {}) {
     listName: row.listName,
     name: row.name,
     url: row.url,
+    michelinUrl: row.michelinUrl,
     address: row.address,
     location: row.location,
     latitude: row.latitude,
@@ -238,9 +245,10 @@ async function resolveAttempt(
   maxDistanceM,
   verificationOptions
 ) {
+  const searchRow = searchAttempt.searchRow ?? row;
   const candidate = await selectPlaceCandidate(
     page,
-    row,
+    searchRow,
     searchAttempt.url,
     maxDistanceM
   );
@@ -252,14 +260,79 @@ async function resolveAttempt(
     verificationOptions
   );
 
+  let saveButton;
   try {
-    const saveButton = await findSaveButton(page);
-    return { ...candidate, verifiedPlace, saveButton };
+    saveButton = await findSaveButton(page);
   } catch (error) {
-    // A verified candidate is safe to use for wrong-list cleanup even if Save is unavailable.
-    error.verifiedPlace = verifiedPlace;
-    throw error;
+    if (error.code !== errorCodes.saveUnavailable) throw error;
+
+    console.error(`reopening ${row.name} after Google Maps lost the place page`);
+    const recoveredCandidate = await selectPlaceCandidate(
+      page,
+      row,
+      verifiedPlace.googleUrl,
+      maxDistanceM
+    );
+    const recoveredPlace = await verifyPlaceLocation(
+      page,
+      row,
+      maxDistanceM,
+      recoveredCandidate.referenceUrl,
+      verificationOptions
+    );
+    saveButton = await findSaveButton(page);
+    return {
+      ...recoveredCandidate,
+      verifiedPlace: recoveredPlace,
+      saveButton,
+      resolution: searchAttempt.resolution ?? "google-search",
+      verificationOptions,
+    };
   }
+
+  return {
+    ...candidate,
+    verifiedPlace,
+    saveButton,
+    resolution: searchAttempt.resolution ?? "google-search",
+    verificationOptions,
+  };
+}
+
+async function resolveMichelinFallback(
+  page,
+  row,
+  maxDistanceM,
+  previousAttempts
+) {
+  const mapLocation = await findMichelinMapCoordinates(page, row.michelinUrl);
+  const searchRow = {
+    ...row,
+    latitude: mapLocation.coordinates.latitude,
+    longitude: mapLocation.coordinates.longitude,
+  };
+  const resolved = await resolveAttempt(
+    page,
+    row,
+    {
+      url: makeGmapsSearchUrl(
+        row.name,
+        mapLocation.coordinates.latitude,
+        mapLocation.coordinates.longitude
+      ),
+      description: "its Michelin map location",
+      resolution: "michelin-map",
+      searchRow,
+    },
+    maxDistanceM,
+    { expectedCoordinates: mapLocation.coordinates }
+  );
+
+  return {
+    ...resolved,
+    michelinMapCoordinates: mapLocation.coordinates,
+    resolutionAttempts: previousAttempts,
+  };
 }
 
 async function resolvePlace(
@@ -270,7 +343,6 @@ async function resolvePlace(
 ) {
   const attempts = searchAttemptsForRow(row);
   const failures = [];
-  let cleanupCandidate = null;
   let lastError;
 
   for (let index = 0; index < attempts.length; index += 1) {
@@ -288,28 +360,16 @@ async function resolvePlace(
         verificationOptions
       );
       if (expectedReference) {
-        try {
-          assertExpectedPlace(
-            row,
-            expectedReference,
-            resolved.verifiedPlace,
-            maxDistanceM
-          );
-        } catch (error) {
-          error.verifiedPlace = resolved.verifiedPlace;
-          throw error;
-        }
+        assertExpectedPlace(
+          row,
+          expectedReference,
+          resolved.verifiedPlace,
+          maxDistanceM
+        );
       }
       return resolved;
     } catch (error) {
       lastError = error;
-      if (
-        error.verifiedPlace?.placeId ||
-        error.verifiedPlace?.path ||
-        error.verifiedPlace?.coordinates
-      ) {
-        cleanupCandidate = error.verifiedPlace;
-      }
       failures.push({
         description: searchAttempt.description,
         code: error.code,
@@ -327,33 +387,98 @@ async function resolvePlace(
       `could not resolve ${row.name}`
     );
   }
-  if (cleanupCandidate) lastError.cleanupCandidate = cleanupCandidate;
+
+  if (
+    !expectedReference &&
+    row.michelinUrl?.trim() &&
+    michelinFallbackErrorCodes.has(lastError.code)
+  ) {
+    const description = "its Michelin map location";
+    console.log(`retrying ${row.name} with ${description}`);
+    try {
+      return await resolveMichelinFallback(
+        page,
+        row,
+        maxDistanceM,
+        failures
+      );
+    } catch (error) {
+      lastError = error;
+      failures.push({
+        description,
+        code: error.code,
+        message: error.message,
+      });
+    }
+  }
+
   lastError.resolutionAttempts = failures;
   throw lastError;
 }
 
 async function savePlace(page, row, maxDistanceM, noteTimeoutMs) {
-  const resolved = await resolvePlace(page, row, maxDistanceM);
+  let resolved = await resolvePlace(page, row, maxDistanceM);
+  let savedPlace;
 
-  await resolved.saveButton.click({ timeout: 10000 });
-  const savedPlace = await verifyPlaceLocation(
-    page,
-    row,
-    maxDistanceM,
-    resolved.verifiedPlace.googleUrl
-  );
-  assertSamePlace(row, resolved.verifiedPlace, savedPlace, maxDistanceM);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await resolved.saveButton.click({ timeout: 10000 });
+      savedPlace = await verifyPlaceLocation(
+        page,
+        row,
+        maxDistanceM,
+        resolved.verifiedPlace.googleUrl,
+        resolved.verificationOptions
+      );
+      assertSamePlace(row, resolved.verifiedPlace, savedPlace, maxDistanceM);
+      break;
+    } catch (error) {
+      const placePageLost =
+        attempt < 2 &&
+        error.code === errorCodes.placeUnverified &&
+        /Google Maps changed place while handling the row/.test(error.message);
+      if (!placePageLost) throw error;
 
-  const membership = await correctMichelinListMembership(page, row);
-  if (membership.initiallyChecked && membership.movedFrom.length === 0) {
+      console.error(`reopening ${row.name} after Google Maps lost the place page`);
+      resolved = await resolveAttempt(
+        page,
+        row,
+        {
+          url: resolved.verifiedPlace.googleUrl,
+          description: "the verified place",
+          resolution: resolved.resolution,
+        },
+        maxDistanceM,
+        resolved.verificationOptions
+      );
+
+      const recoveredSaveState = await resolved.saveButton.getAttribute(
+        "data-value"
+      );
+      if (/^Saved$/i.test(recoveredSaveState ?? "")) {
+        savedPlace = resolved.verifiedPlace;
+        break;
+      }
+    }
+  }
+
+  const membership = await setListMembership(page, row.listName, true);
+  if (membership.initiallyChecked) {
     console.log(`already saved: ${row.name} -> ${row.listName}`);
-  } else if (membership.movedFrom.length > 0) {
-    console.log(`corrected saved list: ${row.name} -> ${row.listName}`);
   }
 
   await page.keyboard.press("Escape").catch(() => {});
   await addNoteIfPossible(page, row.listName, row.note, noteTimeoutMs);
-  return { ...savedPlace, movedFrom: membership.movedFrom };
+  return {
+    ...savedPlace,
+    resolution: resolved.resolution,
+    ...(resolved.michelinMapCoordinates
+      ? { michelinMapCoordinates: resolved.michelinMapCoordinates }
+      : {}),
+    ...(resolved.resolutionAttempts
+      ? { resolutionAttempts: resolved.resolutionAttempts }
+      : {}),
+  };
 }
 
 async function removePlace(page, row, maxDistanceM) {
@@ -380,34 +505,6 @@ async function removePlace(page, row, maxDistanceM) {
   };
 }
 
-async function cleanupResolutionFailure(page, row, error, maxDistanceM) {
-  if (!error.cleanupCandidate) return;
-
-  try {
-    const candidate = error.cleanupCandidate;
-    console.log(`reopening verified place for cleanup: ${row.name}`);
-    await openMapsUrl(page, candidate.googleUrl);
-    await verifyPlaceLocation(
-      page,
-      row,
-      maxDistanceM,
-      candidate.googleUrl,
-      { requireSourceLocation: true }
-    );
-    error.cleanup = await removeWrongMichelinMemberships(page, row);
-    if (error.cleanup.removedFrom.length > 0) {
-      console.log(
-        `cleaned up wrong saved lists for ${row.name}: ${error.cleanup.removedFrom.join(", ")}`
-      );
-    }
-  } catch (cleanupError) {
-    error.cleanupError = errorDetails(cleanupError);
-    console.error(
-      `could not clean up wrong Michelin memberships for ${row.name}: ${error.cleanupError}`
-    );
-  }
-}
-
 const options = getopts(process.argv.slice(2), {
   alias: {
     checkpoint: ["c"],
@@ -418,6 +515,7 @@ const options = getopts(process.argv.slice(2), {
     continueOnError: ["continue-on-error", "continue"],
     maxDistanceM: ["max-distance-m", "max-distance"],
     noteTimeoutMs: ["note-timeout-ms", "note-timeout"],
+    addressOnly: ["address-only"],
     retryFailed: ["retry-failed", "retry-errors", "retry"],
     skipAttempted: ["skip-attempted", "skip-tried"],
     remove: ["remove", "unsave"],
@@ -438,11 +536,14 @@ async function main() {
     return;
   }
 
-  const rows = parse(await readFile(csvFile), {
+  const parsedRows = parse(await readFile(csvFile), {
     bom: true,
     columns: true,
     trim: true,
   });
+  const rows = options.addressOnly
+    ? parsedRows.map((row) => ({ ...row, latitude: "", longitude: "" }))
+    : parsedRows;
   validateRows(rows);
 
   const selectedRows = options.listName
@@ -541,9 +642,6 @@ async function main() {
         await writeCheckpoint(options.checkpoint, checkpoint);
         succeeded += 1;
       } catch (error) {
-        if (!options.remove) {
-          await cleanupResolutionFailure(browser.page, row, error, maxDistanceM);
-        }
         const failedGoogleUrl = pageUrl(browser.page);
         const screenshot = await captureFailureScreenshot(browser.page);
         let recoveryError = null;
@@ -567,8 +665,6 @@ async function main() {
           error: errorDetails(error),
           screenshot: screenshot.path,
           googleUrl: failedGoogleUrl,
-          ...(error.cleanup ? { cleanup: error.cleanup } : {}),
-          ...(error.cleanupError ? { cleanupError: error.cleanupError } : {}),
           ...(error.resolutionAttempts
             ? { resolutionAttempts: error.resolutionAttempts }
             : {}),
