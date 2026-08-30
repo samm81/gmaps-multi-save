@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parse } from "csv-parse/sync";
@@ -60,6 +61,7 @@ function usage() {
     "CSV columns: name,url,note,listName; optional source metadata: michelinUrl,address,location,latitude,longitude",
     "Each row resolves and verifies one Google Maps place before changing saved lists.",
     "Google Maps list-name lookups use the first 40 characters.",
+    "Each new checkpoint stores a hashed copy of its source CSV beside the checkpoint.",
     "Rerunning the same command skips rows already attempted; use --retry-failed to retry failures.",
     "Use --remove to unsave the exact place URL from its list instead of saving it.",
     "Run `npm run gmaps:login` first to create the local Google session.",
@@ -92,6 +94,67 @@ async function writeCheckpoint(checkpointFile, checkpoint) {
   const temporaryFile = `${checkpointFile}.tmp`;
   await writeFile(temporaryFile, `${JSON.stringify(checkpoint, null, 2)}\n`);
   await rename(temporaryFile, checkpointFile);
+}
+
+function sha256(contents) {
+  return createHash("sha256").update(contents).digest("hex");
+}
+
+function sourceSnapshotFor(checkpointFile, csvFile, csvContents, rowCount) {
+  return {
+    sourceFile: path.resolve(csvFile),
+    snapshotFile: path.resolve(`${checkpointFile}.source.csv`),
+    sha256: sha256(csvContents),
+    rowCount,
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+async function ensureSourceSnapshot(
+  checkpointFile,
+  checkpoint,
+  csvFile,
+  csvContents,
+  rowCount
+) {
+  const current = sourceSnapshotFor(
+    checkpointFile,
+    csvFile,
+    csvContents,
+    rowCount
+  );
+  const previous = checkpoint.sourceSnapshot;
+  if (previous?.sha256 && previous.sha256 !== current.sha256) {
+    throw new Error(
+      `source CSV changed since checkpoint ${checkpointFile}; use a new checkpoint`
+    );
+  }
+
+  const snapshotFile = previous?.snapshotFile
+    ? path.resolve(previous.snapshotFile)
+    : current.snapshotFile;
+  try {
+    const snapshotContents = await readFile(snapshotFile);
+    if (sha256(snapshotContents) !== current.sha256) {
+      throw new Error(
+        `source snapshot does not match ${csvFile}: ${snapshotFile}`
+      );
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    await mkdir(path.dirname(snapshotFile), { recursive: true });
+    await writeFile(snapshotFile, csvContents);
+  }
+
+  if (previous?.sha256 === current.sha256 && previous.snapshotFile) {
+    return false;
+  }
+
+  checkpoint.sourceSnapshot = {
+    ...current,
+    snapshotFile,
+  };
+  return true;
 }
 
 function placeKey({ name, url, listName }) {
@@ -536,7 +599,8 @@ async function main() {
     return;
   }
 
-  const parsedRows = parse(await readFile(csvFile), {
+  const csvContents = await readFile(csvFile);
+  const parsedRows = parse(csvContents, {
     bom: true,
     columns: true,
     trim: true,
@@ -604,6 +668,17 @@ async function main() {
         : `previous failures skipped: ${previousFailures.length}`
     );
     return;
+  }
+
+  const sourceSnapshotChanged = await ensureSourceSnapshot(
+    options.checkpoint,
+    checkpoint,
+    csvFile,
+    csvContents,
+    rows.length
+  );
+  if (sourceSnapshotChanged) {
+    await writeCheckpoint(options.checkpoint, checkpoint);
   }
 
   let browser = await openMapsBrowser();

@@ -62,7 +62,7 @@ To reverse the full regional file, run `make build/michelin-regional-reversed.cs
 
 To omit Mainland China, generate `build/michelin-regional--no-china.csv`. To process that file from the end first, generate `build/michelin-regional--no-china--reversed.csv`; its Bib Gourmand rows come first.
 
-The generated Michelin rows retain the Michelin page URL, source address, and coordinates. The Playwright runner selects a matching Google Maps result before looking for the Save control, then verifies the place location again after Save opens the list picker and immediately before selecting the list. By default, it only saves a place resolved within 100 meters of the Michelin coordinates; when Google keeps the browser on a search URL, it checks the visible place address instead. A different displayed place name is accepted when the coordinates or address verify the source location. When an address is available, it first searches for the Michelin name with the source address appended, then retries with the name alone if it cannot find or verify a place. Rows that do not pass location verification, including results over 100 meters away, are recorded as failures and are not marked complete for manual review. Successful checkpoint entries include the verified place identity. Adjust the coordinate tolerance with `--max-distance-m 50` (or another positive distance in meters).
+The generated Michelin rows retain the Michelin page URL, source address, and coordinates. The Playwright runner selects a matching Google Maps result before looking for the Save control, then verifies the place location again after Save opens the list picker and immediately before selecting the list. By default, it only saves a place resolved within 1000 meters of the Michelin coordinates; when Google keeps the browser on a search URL, it checks the visible place address instead. A different displayed place name is accepted when the coordinates or address verify the source location. When an address is available, it first searches for the Michelin name with the source address appended, then retries with the name alone if it cannot find or verify a place. If those searches fail and `michelinUrl` is present, it opens the Michelin page, extracts the coordinates from its Google Maps embed, and retries the Google Maps search centered on that location. This fallback verifies against the embedded coordinates and records `michelin-map` as the resolution method. Rows that do not pass location verification, including results over 1000 meters away, are recorded as failures and are not marked complete for manual review. Successful checkpoint entries include the verified place identity. Adjust the coordinate tolerance with `--max-distance-m 50` (or another positive distance in meters).
 
 After creating those lists in Google Maps, run:
 
@@ -96,9 +96,25 @@ npm run gmaps:save-list -- 'stale-places.csv' \
 
 The removal checkpoint is separate from the save checkpoint, so both operations can be audited and resumed independently.
 
-### migration reminder
+### audit a Takeout export
 
-The current manual Michelin list migration is documented in [`michelin-regional-migration.md`](michelin-regional-migration.md).
+To compare a Google Takeout saved-list export with an expected source CSV, run:
+
+```bash
+npm run audit:takeout -- \
+    --source expected.csv \
+    --takeout-dir Takeout \
+    --output takeout-audit.csv \
+    --report takeout-audit.json
+```
+
+The source CSV must contain `name`, `url`, and `listName` columns. The audit maps each Takeout filename to the matching source list, including list names truncated to Google’s 40-character limit, and ignores files that do not resolve to a source list. Membership matching is one-to-one within each list: unique place IDs, saved notes, and normalized names are tried in that order, while duplicate values remain unresolved. A unique same-list name variant that passes the close-enough check is accepted as a match. Unique cross-list matches are reported as `wrong-list`; name variants with multiple candidates are reported as `ambiguous-name`. The output CSV contains one row for every unmatched source item (`missing`) and every unmatched Takeout item (`extra`), including the source and Takeout metadata needed to review the difference. Pass `--notes-output notes.csv` to produce a separate audit of source notes that are missing or different in Takeout. Keep exports and audit output outside tracked source directories; personal Takeout data is ignored by Git.
+
+For a historical import audit, pass the exact source snapshot used for that import as `--baseline-source`, then repeat `--checkpoint checkpoint.json` for the save checkpoints that contain successful attempts. The baseline is used for membership, and successful checkpoint URLs provide stable Google place IDs so renamed Google Maps titles do not create false missing/extra rows. The current `--source` is compared with the baseline separately; pass `--changes-output source-changes.csv` to write rows that were added, removed, renamed, moved between lists, or had source metadata updated. New runner checkpoints store a hashed copy of their input CSV beside the checkpoint and refuse to resume against a changed CSV. Older checkpoints do not contain this snapshot, so provide their historical source explicitly.
+
+### Michelin manual review
+
+Known Michelin entries that require manual review are recorded in [`michelin/manual-review.csv`](michelin/manual-review.csv). These rows remain in the canonical build so the source total stays complete.
 
 ### generic
 

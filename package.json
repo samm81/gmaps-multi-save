@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "description": "Import place lists into Google Maps saved lists",
   "scripts": {
+    "audit:takeout": "node tools/audit-takeout.mjs",
     "gmaps:login": "node tools/gmaps-login.mjs",
     "gmaps:save-list": "node tools/gmaps-save-list.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"

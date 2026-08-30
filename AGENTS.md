@@ -28,6 +28,7 @@ Playwright and CSV helpers for importing place lists into Google Maps saved list
 - `make readme.md` - Regenerate `readme.md` from `readme.tmpl.md`.
 - `make data/michelin.csv` - Download the Michelin source CSV into `data/`.
 - `make build/michelin-regional.csv` - Generate the regional Michelin import CSV.
+- `npm run audit:takeout` - Compare an expected CSV with Google Takeout lists.
 - `make clean` - Remove generated artifacts.
 
 ## Rules

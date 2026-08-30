@@ -6,3 +6,6 @@ data/
 /archive/bookmarklet/csv-to-gmaps-paste-snippet.mjs
 .playwright/
 output/playwright/
+/_michelin/
+/Takeout/
+michelin-regional-migration.md
