@@ -129,7 +129,9 @@ Takeout export to contain legacy or unrelated lists.
 With --baseline-source, membership is audited against the source snapshot used
 for the import. Checkpoints supply stable Google place IDs for that snapshot;
 without a checkpoint ID, the audit falls back to notes and names. The current
-source is used for a separate source-change report.
+source is used for a separate source-change report. For that report, unique
+source rows with the same normalized name and description are treated as the
+same restaurant, even when their address or coordinates changed.
 
 Membership matching is one-to-one within each list, using unique place IDs,
 notes, and normalized names in that order. A value is not matched when it is
@@ -646,6 +648,11 @@ function sourceIdentityValue(row, field) {
     const address = normalizeText(row.address);
     return name && address ? `${name}\u0000${address}` : "";
   }
+  if (field === "name+note") {
+    const name = normalizeName(row.name);
+    const note = normalizeText(row.note);
+    return name && note ? `${name}\u0000${note}` : "";
+  }
   return "";
 }
 
@@ -816,6 +823,7 @@ function buildSourceChanges(baselineRows, currentRows) {
   const matchSteps = [
     ["placeId", () => true],
     ["michelinUrl", () => true],
+    ["name+note", () => true],
     ["name+address", () => true],
   ];
 
