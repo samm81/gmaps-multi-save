@@ -4,8 +4,11 @@ node_modules
 build/
 data/
 /archive/bookmarklet/csv-to-gmaps-paste-snippet.mjs
-.playwright/
+/.playwright/
+/.playwright-cli/
 output/playwright/
 /_michelin/
 /Takeout/
+/takeout*.tgz
+/takeout*.zip
 michelin-regional-migration.md
