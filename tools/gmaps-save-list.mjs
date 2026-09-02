@@ -23,6 +23,11 @@ import {
   runnerError,
 } from "./gmaps-errors.mjs";
 import {
+  manifestDirDefault,
+  manifestRemoveEntry,
+  manifestUpsertEntry,
+} from "./gmaps-manifest.mjs";
+import {
   addNoteIfPossible,
   findSaveButton,
   selectPlaceCandidate,
@@ -56,12 +61,14 @@ function usage() {
     "usage: npm run gmaps:save-list -- places.csv [--list-name name] [--limit 20]",
     "       [--checkpoint path] [--continue-on-error] [--delay-ms 250]",
     "       [--max-distance-m 1000] [--note-timeout-ms 60000]",
+    "       [--manifest-dir local]",
     "       [--address-only] [--retry-failed] [--remove] [--dry-run]",
     "",
     "CSV columns: name,url,note,listName; optional source metadata: michelinUrl,address,location,latitude,longitude",
     "Each row resolves and verifies one Google Maps place before changing saved lists.",
     "Google Maps list-name lookups use the first 40 characters.",
     "Each new checkpoint stores a hashed copy of its source CSV beside the checkpoint.",
+    "Successful saves update one place manifest per list under --manifest-dir.",
     "Rerunning the same command skips rows already attempted; use --retry-failed to retry failures.",
     "Use --remove to unsave the exact place URL from its list instead of saving it.",
     "Run `npm run gmaps:login` first to create the local Google session.",
@@ -479,7 +486,13 @@ async function resolvePlace(
   throw lastError;
 }
 
-async function savePlace(page, row, maxDistanceM, noteTimeoutMs) {
+async function savePlace(
+  page,
+  row,
+  maxDistanceM,
+  noteTimeoutMs,
+  manifestDir
+) {
   let resolved = await resolvePlace(page, row, maxDistanceM);
   let savedPlace;
 
@@ -530,6 +543,7 @@ async function savePlace(page, row, maxDistanceM, noteTimeoutMs) {
     console.log(`already saved: ${row.name} -> ${row.listName}`);
   }
 
+  await manifestUpsertEntry(manifestDir, row, savedPlace);
   await page.keyboard.press("Escape").catch(() => {});
   await addNoteIfPossible(page, row.listName, row.note, noteTimeoutMs);
   return {
@@ -544,7 +558,7 @@ async function savePlace(page, row, maxDistanceM, noteTimeoutMs) {
   };
 }
 
-async function removePlace(page, row, maxDistanceM) {
+async function removePlace(page, row, maxDistanceM, manifestDir) {
   const exactPlaceReference = placeReferenceFromUrl(normalizeMapsUrl(row.url));
   const verificationOptions =
     exactPlaceReference && !hasSourceLocation(row)
@@ -561,6 +575,7 @@ async function removePlace(page, row, maxDistanceM) {
   } else {
     console.log(`removed: ${row.name} -> ${row.listName}`);
   }
+  await manifestRemoveEntry(manifestDir, row, resolved.verifiedPlace);
   await page.keyboard.press("Escape").catch(() => {});
   return {
     googleUrl: resolved.verifiedPlace.googleUrl,
@@ -577,6 +592,7 @@ const options = getopts(process.argv.slice(2), {
     listName: ["list-name", "list"],
     continueOnError: ["continue-on-error", "continue"],
     maxDistanceM: ["max-distance-m", "max-distance"],
+    manifestDir: ["manifest-dir", "manifests"],
     noteTimeoutMs: ["note-timeout-ms", "note-timeout"],
     addressOnly: ["address-only"],
     retryFailed: ["retry-failed", "retry-errors", "retry"],
@@ -587,6 +603,7 @@ const options = getopts(process.argv.slice(2), {
     checkpoint: checkpointDefault,
     delayMs: rowDelayMsDefault,
     maxDistanceM: maxDistanceMDefault,
+    manifestDir: manifestDirDefault,
     noteTimeoutMs: noteTimeoutMsDefault,
   },
 });
@@ -698,8 +715,19 @@ async function main() {
 
       try {
         const result = options.remove
-          ? await removePlace(browser.page, row, maxDistanceM)
-          : await savePlace(browser.page, row, maxDistanceM, noteTimeoutMs);
+          ? await removePlace(
+              browser.page,
+              row,
+              maxDistanceM,
+              options.manifestDir
+            )
+          : await savePlace(
+              browser.page,
+              row,
+              maxDistanceM,
+              noteTimeoutMs,
+              options.manifestDir
+            );
 
         const key = placeKey(row);
         completed.add(key);

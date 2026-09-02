@@ -9,6 +9,7 @@ data/
 output/playwright/
 /_michelin/
 /Takeout/
+/local/
 /takeout*.tgz
 /takeout*.zip
 michelin-regional-migration.md

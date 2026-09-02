@@ -5,6 +5,7 @@
   "scripts": {
     "audit:takeout": "node tools/audit-takeout.mjs",
     "gmaps:login": "node tools/gmaps-login.mjs",
+    "gmaps:migrate-manifests": "node tools/gmaps-migrate-manifests.mjs",
     "gmaps:save-list": "node tools/gmaps-save-list.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
