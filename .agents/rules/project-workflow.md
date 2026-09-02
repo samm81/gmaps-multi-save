@@ -5,6 +5,7 @@
 The active Google Maps automation lives in `tools/`. Source-specific converters live at the repository root, including `michelin-to-csv.mjs` and `generic-to-csv.mjs`. The former bookmarklet workflow is preserved under `archive/bookmarklet/` and is not part of the active build.
 
 Generated README output is checked in at the root as `readme.md`. Do not edit `readme.md` directly; update `readme.tmpl.md` and run `make readme.md`. Generated CSVs go under `build/`; temporary input data may go under `data/`.
+Per-list Google Maps place manifests go under ignored `local/`.
 
 ## JavaScript Conventions
 
