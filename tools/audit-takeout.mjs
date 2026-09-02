@@ -8,6 +8,7 @@ import {
   placeReferenceFromUrl,
   sourceCoordinates,
 } from "./gmaps-place.mjs";
+import { manifestDirDefault, readManifests } from "./gmaps-manifest.mjs";
 
 const matchFields = ["placeId", "note", "name"];
 
@@ -104,12 +105,16 @@ const options = getopts(process.argv.slice(2), {
     notesOutput: ["notes-output", "note-output", "n"],
     baselineSource: ["baseline-source", "baseline"],
     checkpoint: ["checkpoint", "c"],
+    manifestDir: ["manifest-dir", "manifests"],
     changesOutput: [
       "changes-output",
       "source-changes-output",
       "source-change-output",
     ],
     help: ["h"],
+  },
+  default: {
+    manifestDir: manifestDirDefault,
   },
 });
 
@@ -119,7 +124,8 @@ if (options.help) {
   --takeout-dir Takeout \
   --output audit.csv [--baseline-source imported.csv] \
   [--checkpoint checkpoint.json ...] [--changes-output changes.csv] \
-  [--report audit.json] [--notes-output notes.csv]
+  [--report audit.json] [--notes-output notes.csv] \
+  [--manifest-dir local]
 
 The current and baseline source CSVs must contain name, listName, and url
 columns. Takeout must contain Google saved-list CSV files. Files that do not
@@ -131,7 +137,9 @@ for the import. Checkpoints supply stable Google place IDs for that snapshot;
 without a checkpoint ID, the audit falls back to notes and names. The current
 source is used for a separate source-change report. For that report, unique
 source rows with the same normalized name and description are treated as the
-same restaurant, even when their address or coordinates changed.
+same restaurant, even when their address or coordinates changed. Without a
+baseline source, successful per-list manifests under --manifest-dir supply
+stable Google place IDs automatically.
 
 Membership matching is one-to-one within each list, using unique place IDs,
 notes, and normalized names in that order. A value is not matched when it is
@@ -708,7 +716,8 @@ function matchUniqueSourceCoordinates(
   baselineRows,
   currentRows,
   baselineMatched,
-  currentMatched
+  currentMatched,
+  candidateFilter = () => true
 ) {
   const baselineAvailable = baselineRows.filter(
     (row) => !baselineMatched.has(row.id) && sourceCoordinates(row)
@@ -722,6 +731,7 @@ function matchUniqueSourceCoordinates(
     const currentCandidates = currentAvailable.filter(
       (current) =>
         !currentMatched.has(current.id) &&
+        candidateFilter(baseline, current) &&
         sourceRowsWithinMatchDistance(baseline, current)
     );
     if (currentCandidates.length !== 1) continue;
@@ -730,6 +740,7 @@ function matchUniqueSourceCoordinates(
     const baselineCandidates = baselineAvailable.filter(
       (candidate) =>
         !baselineMatched.has(candidate.id) &&
+        candidateFilter(candidate, current) &&
         sourceRowsWithinMatchDistance(candidate, current)
     );
     if (baselineCandidates.length !== 1) continue;
@@ -816,15 +827,19 @@ function buildSourceChangeRow(
   };
 }
 
-function buildSourceChanges(baselineRows, currentRows) {
+function matchSourceRows(
+  baselineRows,
+  currentRows,
+  candidateFilter = () => true
+) {
   const baselineMatched = new Set();
   const currentMatched = new Set();
   const pairs = [];
   const matchSteps = [
-    ["placeId", () => true],
-    ["michelinUrl", () => true],
-    ["name+note", () => true],
-    ["name+address", () => true],
+    ["placeId", candidateFilter],
+    ["michelinUrl", candidateFilter],
+    ["name+note", candidateFilter],
+    ["name+address", candidateFilter],
   ];
 
   for (const [field, candidateFilter] of matchSteps) {
@@ -844,7 +859,8 @@ function buildSourceChanges(baselineRows, currentRows) {
       baselineRows,
       currentRows,
       baselineMatched,
-      currentMatched
+      currentMatched,
+      candidateFilter
     )
   );
   pairs.push(
@@ -854,8 +870,49 @@ function buildSourceChanges(baselineRows, currentRows) {
       baselineMatched,
       currentMatched,
       "name",
-      sourceRowsWithinMatchDistance
+      (baseline, current) =>
+        candidateFilter(baseline, current) &&
+        sourceRowsWithinMatchDistance(baseline, current)
     )
+  );
+
+  return { baselineMatched, currentMatched, pairs };
+}
+
+function addManifestPlaceIds(rows, manifestRows) {
+  const sameList = (baseline, current) =>
+    normalizeText(baseline.listName) === normalizeText(current.listName);
+  const sameListMatches = matchSourceRows(manifestRows, rows, sameList);
+  const remainingMatches = matchSourceRows(
+    manifestRows.filter((row) => !sameListMatches.baselineMatched.has(row.id)),
+    rows.filter((row) => !sameListMatches.currentMatched.has(row.id))
+  );
+  const pairs = [...sameListMatches.pairs, ...remainingMatches.pairs];
+  const manifestByCurrentId = new Map(
+    pairs
+      .filter((pair) => rowPlaceId(pair.baseline))
+      .map((pair) => [pair.current.id, pair.baseline])
+  );
+
+  return rows.map((row) => {
+    if (rowPlaceId(row)) return row;
+
+    const manifest = manifestByCurrentId.get(row.id);
+    if (!manifest) return row;
+
+    return {
+      ...row,
+      placeId: rowPlaceId(manifest),
+      manifestGoogleUrl: manifest.googleUrl,
+      manifestFile: manifest.manifestFile,
+    };
+  });
+}
+
+function buildSourceChanges(baselineRows, currentRows) {
+  const { baselineMatched, currentMatched, pairs } = matchSourceRows(
+    baselineRows,
+    currentRows
   );
 
   const compareMichelinUrl = baselineRows.some((row) =>
@@ -1209,6 +1266,9 @@ async function main() {
     : currentSourceRowsRaw;
   const checkpointFiles = optionValues(options.checkpoint);
   const checkpoints = await readCheckpointMappings(checkpointFiles);
+  const manifests = options.baselineSource
+    ? { files: [], rows: [] }
+    : await readManifests(options.manifestDir);
   const baselineSourceRows = addCheckpointPlaceIds(
     baselineSourceRowsRaw,
     checkpoints.mappings
@@ -1231,10 +1291,9 @@ async function main() {
           currentUnmatched: 0,
         },
       };
-  const currentSourceRows = addInheritedPlaceIds(
-    currentSourceRowsDirect,
-    sourceChanges
-  );
+  const currentSourceRows = options.baselineSource
+    ? addInheritedPlaceIds(currentSourceRowsDirect, sourceChanges)
+    : addManifestPlaceIds(currentSourceRowsDirect, manifests.rows);
   const membershipSourceRows = options.baselineSource
     ? baselineSourceRows
     : currentSourceRows;
@@ -1291,6 +1350,9 @@ async function main() {
     checkpointSnapshots: checkpoints.snapshots,
     checkpointMappings: checkpoints.mappings.size,
     checkpointConflicts: checkpoints.conflicts,
+    manifestDir: options.manifestDir,
+    manifestFiles: manifests.files,
+    manifestRows: manifests.rows.length,
     sourceRows: membershipSourceRows.length,
     baselineSourceRows: baselineSourceRows.length,
     currentSourceRows: currentSourceRows.length,
