@@ -49,6 +49,14 @@ export function michelinMapCoordinatesFromUrl(url) {
   return null;
 }
 
+export function michelinMapQueryFromUrl(url) {
+  try {
+    return new URL(url).searchParams.get("q")?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 async function waitForMichelinMapFrame(page) {
   const frame = page.locator(michelinMapFrameSelector).first();
   const deadline = Date.now() + michelinMapFrameTimeoutMs;
@@ -67,7 +75,7 @@ async function waitForMichelinMapFrame(page) {
   );
 }
 
-export async function findMichelinMapCoordinates(page, michelinUrl) {
+export async function findMichelinMapLocation(page, michelinUrl) {
   await clearMichelinSiteData(page);
 
   try {
@@ -84,12 +92,13 @@ export async function findMichelinMapCoordinates(page, michelinUrl) {
 
   const { source } = await waitForMichelinMapFrame(page);
   const coordinates = michelinMapCoordinatesFromUrl(source);
-  if (!coordinates) {
+  const query = michelinMapQueryFromUrl(source);
+  if (!coordinates && !query) {
     throw runnerError(
       errorCodes.locationUnverified,
-      "Michelin page exposed a Google Maps iframe without coordinates"
+      "Michelin page exposed a Google Maps iframe without a location query"
     );
   }
 
-  return { coordinates };
+  return { coordinates, query };
 }

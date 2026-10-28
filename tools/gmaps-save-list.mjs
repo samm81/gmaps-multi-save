@@ -9,7 +9,7 @@ import {
   sleep,
 } from "./gmaps-playwright.mjs";
 import { makeGmapsSearchUrl } from "./gmaps-url.mjs";
-import { findMichelinMapCoordinates } from "./michelin-page.mjs";
+import { findMichelinMapLocation } from "./michelin-page.mjs";
 import {
   hasSourceLocation,
   maxDistanceMDefault,
@@ -30,6 +30,8 @@ import {
 import {
   addNoteIfPossible,
   findSaveButton,
+  listSavedCheck,
+  noteSavedCheck,
   selectPlaceCandidate,
   setListMembership,
   verifyPlaceLocation,
@@ -62,7 +64,7 @@ function usage() {
     "       [--checkpoint path] [--continue-on-error] [--delay-ms 250]",
     "       [--max-distance-m 1000] [--note-timeout-ms 60000]",
     "       [--manifest-dir local]",
-    "       [--address-only] [--retry-failed] [--remove] [--dry-run]",
+    "       [--address-only] [--retry-failed] [--remove | --note-only] [--dry-run]",
     "",
     "CSV columns: name,url,note,listName; optional source metadata: michelinUrl,address,location,latitude,longitude",
     "Each row resolves and verifies one Google Maps place before changing saved lists.",
@@ -71,6 +73,7 @@ function usage() {
     "Successful saves update one place manifest per list under --manifest-dir.",
     "Rerunning the same command skips rows already attempted; use --retry-failed to retry failures.",
     "Use --remove to unsave the exact place URL from its list instead of saving it.",
+    "Use --note-only to update notes only for places already in their list.",
     "Run `npm run gmaps:login` first to create the local Google session.",
   ].join("\n");
 }
@@ -375,27 +378,40 @@ async function resolveMichelinFallback(
   maxDistanceM,
   previousAttempts
 ) {
-  const mapLocation = await findMichelinMapCoordinates(page, row.michelinUrl);
+  const mapLocation = await findMichelinMapLocation(page, row.michelinUrl);
+  const coordinates = mapLocation.coordinates ?? sourceCoordinates(row);
+  if (!coordinates) {
+    throw runnerError(
+      errorCodes.locationUnverified,
+      `could not verify ${row.name}: Michelin map did not expose coordinates`
+    );
+  }
   const searchRow = {
     ...row,
-    latitude: mapLocation.coordinates.latitude,
-    longitude: mapLocation.coordinates.longitude,
+    latitude: coordinates.latitude,
+    longitude: coordinates.longitude,
   };
+  const mapQuery = mapLocation.query && !mapLocation.coordinates
+    ? mapLocation.query
+    : row.address || row.name;
   const resolved = await resolveAttempt(
     page,
     row,
     {
       url: makeGmapsSearchUrl(
-        row.name,
-        mapLocation.coordinates.latitude,
-        mapLocation.coordinates.longitude
+        `restaurant ${mapQuery}`,
+        coordinates.latitude,
+        coordinates.longitude
       ),
       description: "its Michelin map location",
       resolution: "michelin-map",
       searchRow,
     },
-    maxDistanceM,
-    { expectedCoordinates: mapLocation.coordinates }
+    Math.min(maxDistanceM, 100),
+    {
+      expectedCoordinates: coordinates,
+      requireAddressMatchForNameMismatch: true,
+    }
   );
 
   return {
@@ -412,6 +428,16 @@ async function resolvePlace(
   { expectedReference = null, verificationOptions = {} } = {}
 ) {
   const attempts = searchAttemptsForRow(row);
+  const sourcePlaceId = row.michelinUrl?.trim()
+    ? placeReferenceFromUrl(row.url)?.placeId
+    : null;
+  const placeVerificationOptions = {
+    ...verificationOptions,
+    trustedPlaceId: sourcePlaceId ?? verificationOptions.trustedPlaceId,
+    requireAddressMatchForNameMismatch:
+      Boolean(row.michelinUrl?.trim() && !sourcePlaceId) ||
+      verificationOptions.requireAddressMatchForNameMismatch,
+  };
   const failures = [];
   let lastError;
 
@@ -426,13 +452,13 @@ async function resolvePlace(
         page,
         row,
         searchAttempt,
-        maxDistanceM,
-        verificationOptions
+        Math.min(maxDistanceM, searchAttempt.maxDistanceM ?? maxDistanceM),
+        placeVerificationOptions
       );
-      if (expectedReference) {
+      if (expectedReference || sourcePlaceId) {
         assertExpectedPlace(
           row,
-          expectedReference,
+          expectedReference ?? placeReferenceFromUrl(row.url),
           resolved.verifiedPlace,
           maxDistanceM
         );
@@ -460,6 +486,7 @@ async function resolvePlace(
 
   if (
     !expectedReference &&
+    !sourcePlaceId &&
     row.michelinUrl?.trim() &&
     michelinFallbackErrorCodes.has(lastError.code)
   ) {
@@ -562,8 +589,8 @@ async function removePlace(page, row, maxDistanceM, manifestDir) {
   const exactPlaceReference = placeReferenceFromUrl(normalizeMapsUrl(row.url));
   const verificationOptions =
     exactPlaceReference && !hasSourceLocation(row)
-      ? { allowNameMismatchWithoutLocation: true }
-      : {};
+      ? { allowNameMismatchWithoutLocation: true, allowAddressPin: true }
+      : { allowAddressPin: true };
   const resolved = await resolvePlace(page, row, maxDistanceM, {
     expectedReference: exactPlaceReference,
     verificationOptions,
@@ -583,6 +610,34 @@ async function removePlace(page, row, maxDistanceM, manifestDir) {
   };
 }
 
+async function noteRepair(page, row, maxDistanceM, noteTimeoutMs) {
+  if (!row.note) throw new Error(`missing note for ${row.name}`);
+  const expectedReference = row.placeId ? { placeId: row.placeId } : null;
+  const resolved = await resolvePlace(page, row, maxDistanceM, {
+    expectedReference,
+    verificationOptions: row.placeId
+      ? { trustedPlaceId: row.placeId }
+      : {},
+  });
+  if (!(await listSavedCheck(page, row.listName))) {
+    throw runnerError(
+      errorCodes.listUnavailable,
+      `${row.name} is not saved in ${row.listName}`
+    );
+  }
+  await page.keyboard.press("Escape").catch(() => {});
+  if (!(await noteSavedCheck(page, row.listName, row.note, noteTimeoutMs))) {
+    await addNoteIfPossible(page, row.listName, row.note, noteTimeoutMs);
+    if (!(await noteSavedCheck(page, row.listName, row.note, noteTimeoutMs, true))) {
+      throw runnerError(
+        errorCodes.noteUnavailable,
+        `note for ${row.listName} did not persist after reload`
+      );
+    }
+  }
+  return resolved.verifiedPlace;
+}
+
 const options = getopts(process.argv.slice(2), {
   alias: {
     checkpoint: ["c"],
@@ -598,6 +653,7 @@ const options = getopts(process.argv.slice(2), {
     retryFailed: ["retry-failed", "retry-errors", "retry"],
     skipAttempted: ["skip-attempted", "skip-tried"],
     remove: ["remove", "unsave"],
+    noteOnly: ["note-only"],
   },
   default: {
     checkpoint: checkpointDefault,
@@ -609,6 +665,9 @@ const options = getopts(process.argv.slice(2), {
 });
 
 async function main() {
+  if (options.remove && options.noteOnly) {
+    throw new Error("--remove and --note-only cannot be used together");
+  }
   const csvFile = options._[0];
   if (!csvFile) {
     console.error(usage());
@@ -710,7 +769,7 @@ async function main() {
       attempted += 1;
       const startedAt = new Date().toISOString();
       console.log(
-        `[${attempted}] ${options.remove ? "removing" : "saving"} ${row.name} -> ${row.listName}`
+        `[${attempted}] ${options.remove ? "removing" : options.noteOnly ? "adding note for" : "saving"} ${row.name} -> ${row.listName}`
       );
 
       try {
@@ -720,6 +779,13 @@ async function main() {
               row,
               maxDistanceM,
               options.manifestDir
+            )
+          : options.noteOnly
+          ? await noteRepair(
+              browser.page,
+              row,
+              maxDistanceM,
+              noteTimeoutMs
             )
           : await savePlace(
               browser.page,

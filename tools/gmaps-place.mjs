@@ -1,4 +1,5 @@
 import { normalizeMapsUrl } from "./gmaps-playwright.mjs";
+import { makeGmapsSearchUrl } from "./gmaps-url.mjs";
 
 export const maxDistanceMDefault = 1_000;
 
@@ -123,6 +124,23 @@ export function searchAttemptsForRow(row) {
     });
   }
   attempts.push({ url: nameSearchUrl, description: "its name only" });
+  const coordinates = sourceCoordinates(row);
+  if (
+    row.michelinUrl?.trim() &&
+    row.address?.trim() &&
+    coordinates &&
+    !placeReferenceFromUrl(row.url)?.placeId
+  ) {
+    attempts.push({
+      url: makeGmapsSearchUrl(
+        `restaurant ${row.address.trim()}`,
+        coordinates.latitude,
+        coordinates.longitude
+      ),
+      description: "restaurants at its source address",
+      maxDistanceM: 100,
+    });
+  }
   return attempts;
 }
 

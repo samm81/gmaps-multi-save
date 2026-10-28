@@ -7,7 +7,6 @@ import {
   maxDistanceMDefault,
   placeNamesMatch,
   placeNamesExactlyMatch,
-  placeNameFromUrl,
   placeReferenceFromUrl,
   placesMatch,
   sourceCoordinates,
@@ -22,8 +21,29 @@ const resultSettleMs = 300;
 const savedListItemSelector =
   '[role="menuitemradio"], [role="menuitemcheckbox"], [role="checkbox"]';
 
+export function clearlyNearestCandidate(candidates) {
+  const nearest = [...candidates].sort(
+    (first, second) =>
+      (first.distanceM ?? Infinity) - (second.distanceM ?? Infinity)
+  );
+  if (
+    nearest.length > 1 &&
+    Number.isFinite(nearest[0].distanceM) &&
+    Number.isFinite(nearest[1].distanceM) &&
+    nearest[0].distanceM <= 25 &&
+    nearest[1].distanceM >= Math.max(20, nearest[0].distanceM * 2)
+  ) {
+    return nearest[0];
+  }
+  return null;
+}
+
 export function truncateListName(listName) {
   return listName.slice(0, googleListNameMaxLength);
+}
+
+export function isStreetAddressPlace(name, sourceAddress) {
+  return Boolean(name && sourceAddress && addressesMatch(name, sourceAddress));
 }
 
 export async function findFirstVisible(
@@ -75,8 +95,7 @@ async function clickOptional(candidates) {
 async function findPlaceName(
   page,
   timeoutMs = 10000,
-  expectedPlace = false,
-  fallbackUrl = null
+  expectedPlace = false
 ) {
   const placeTitle = page.locator('[data-item-id="title"]').first();
   if (await placeTitle.isVisible().catch(() => false)) {
@@ -97,13 +116,8 @@ async function findPlaceName(
       await placeTitle.waitFor({ state: "visible", timeout: 3000 });
       const placeName = (await placeTitle.innerText().catch(() => "")).trim();
       if (placeName) return placeName;
-      if (expectedPlace) {
-        return placeNameFromUrl(page.url()) ?? placeNameFromUrl(fallbackUrl);
-      }
     } catch {
-      if (expectedPlace) {
-        return placeNameFromUrl(page.url()) ?? placeNameFromUrl(fallbackUrl);
-      }
+      return /^results?$/i.test(headingName) ? null : headingName || null;
     }
   }
   if (!/^results?$/i.test(headingName)) return headingName || null;
@@ -177,8 +191,7 @@ export async function capturePlaceIdentity(
     name: await findPlaceName(
       page,
       10000,
-      Boolean(fallbackReference),
-      fallbackUrl
+      Boolean(fallbackReference)
     ),
     address: await findPlaceAddress(page, 3000),
     placeId: reference?.placeId ?? null,
@@ -260,10 +273,51 @@ export async function verifyPlaceLocation(
     expectedCoordinates = null,
     requireSourceLocation = false,
     allowNameMismatchWithoutLocation = false,
+    requireAddressMatchForNameMismatch = false,
+    trustedPlaceId = null,
+    allowAddressPin = false,
   } = {}
 ) {
   const identity = await capturePlaceIdentity(page, maxDistanceM, fallbackUrl);
+  if (
+    !allowAddressPin &&
+    !placeNamesMatch(row.name, identity.name) &&
+    isStreetAddressPlace(identity.name, row.address)
+  ) {
+    throw runnerError(
+      errorCodes.placeUnverified,
+      `Google Maps resolved ${row.name} to a street address rather than a named place: ${identity.name}`
+    );
+  }
+  if (trustedPlaceId) {
+    if (!identity.name) {
+      throw runnerError(
+        errorCodes.placeUnverified,
+        `Google Maps did not show place details for ${row.name}`
+      );
+    }
+    if (identity.placeId !== trustedPlaceId) {
+      throw runnerError(
+        errorCodes.placeUnverified,
+        `Google Maps resolved ${row.name} to a different place than its source URL`
+      );
+    }
+    console.log(`verified ${row.name}: matched source Google Maps place ID`);
+    return identity;
+  }
   const nameMatches = placeNamesMatch(row.name, identity.name);
+  if (
+    requireAddressMatchForNameMismatch &&
+    !nameMatches &&
+    (!row.address ||
+      !identity.address ||
+      !addressesMatch(row.address, identity.address))
+  ) {
+    throw runnerError(
+      errorCodes.locationUnverified,
+      `could not verify ${row.name}: nearby place ${JSON.stringify(identity.name)} has a different or missing street address`
+    );
+  }
   const verified = await verifyPlaceLocationData(
     page,
     row,
@@ -438,6 +492,10 @@ async function findSearchResult(
       return locationCandidates[0].resultLink;
     }
     if (locationCandidates.length > 1) {
+      if (maxDistanceM <= 100) {
+        const nearest = clearlyNearestCandidate(locationCandidates);
+        if (nearest) return nearest.resultLink;
+      }
       throw ambiguousSearchResultsError(row, locationCandidates);
     }
 
@@ -721,6 +779,17 @@ export async function setListMembership(page, listName, desiredChecked) {
   return setListChecked(page, listName, desiredChecked);
 }
 
+export async function listSavedCheck(page, listName) {
+  if (
+    (await savedListGroup(page, listName).isVisible().catch(() => false)) ||
+    (await savedListSummary(page, listName).isVisible().catch(() => false))
+  ) {
+    return true;
+  }
+  const listItem = await ensureListPickerOpen(page, listName);
+  return (await listItem.getAttribute("aria-checked")) === "true";
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -734,6 +803,32 @@ function savedListGroup(page, listName) {
     .first();
 }
 
+function savedListSummary(page, listName) {
+  const visibleListName = escapeRegExp(truncateListName(listName));
+  return page
+    .getByRole("group", {
+      name: new RegExp(
+        `^Saved in (?:.* & )?${visibleListName}(?: & .*)?$`,
+        "i"
+      ),
+    })
+    .first();
+}
+
+async function listDetailsOpen(page, listName) {
+  const visibleListName = truncateListName(listName);
+  const detailsText = new RegExp(
+    `Saved\\s+in\\s+${escapeRegExp(visibleListName)}`,
+    "i"
+  );
+  await clickOptional([
+    () => page.getByRole("button", { name: "Show place lists details" }),
+    () => savedListSummary(page, listName).getByRole("button").first(),
+    () => page.locator("button").filter({ hasText: detailsText }),
+    () => page.locator('[role="button"]').filter({ hasText: detailsText }),
+  ]);
+}
+
 export async function addNoteIfPossible(page, listName, note, noteTimeoutMs) {
   if (!note) return;
 
@@ -744,15 +839,7 @@ export async function addNoteIfPossible(page, listName, note, noteTimeoutMs) {
     .first();
 
   if (!(await textarea.isVisible().catch(() => false))) {
-    const detailsText = new RegExp(
-      `Saved\\s+in\\s+${escapeRegExp(visibleListName)}`,
-      "i"
-    );
-    await clickOptional([
-      () => page.getByRole("button", { name: "Show place lists details" }),
-      () => page.locator("button").filter({ hasText: detailsText }),
-      () => page.locator('[role="button"]').filter({ hasText: detailsText }),
-    ]);
+    await listDetailsOpen(page, listName);
   }
 
   try {
@@ -765,6 +852,44 @@ export async function addNoteIfPossible(page, listName, note, noteTimeoutMs) {
   }
 
   await textarea.fill(note);
-  await textarea.press("Tab");
+  await page.keyboard.press("Tab");
   await page.waitForTimeout(actionSettleMs);
+}
+
+export async function noteSavedCheck(
+  page,
+  listName,
+  note,
+  timeoutMs,
+  reload = false
+) {
+  for (let attempt = 0; attempt < (reload ? 3 : 1); attempt += 1) {
+    if (reload) {
+      await page.waitForTimeout(attempt === 0 ? 15000 : 10000);
+      await page.reload({ waitUntil: "domcontentloaded", timeout: 45000 });
+    }
+    const group = savedListGroup(page, listName);
+    const textarea = group
+      .locator('textarea[aria-label="Add note"], textarea[aria-label="Edit note"]')
+      .first();
+    if (reload) {
+      await textarea
+        .or(savedListSummary(page, listName).getByRole("button").first())
+        .first()
+        .waitFor({ state: "visible", timeout: timeoutMs });
+    }
+    if (!(await textarea.isVisible().catch(() => false))) {
+      await listDetailsOpen(page, listName);
+    }
+    try {
+      await textarea.waitFor({ state: "visible", timeout: timeoutMs });
+    } catch {
+      throw runnerError(
+        errorCodes.noteUnavailable,
+        `could not verify note field for ${truncateListName(listName)}`
+      );
+    }
+    if ((await textarea.inputValue()) === note) return true;
+  }
+  return false;
 }
