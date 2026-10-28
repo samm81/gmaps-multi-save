@@ -30,6 +30,7 @@ Playwright and CSV helpers for importing place lists into Google Maps saved list
 - `make build/michelin-regional.csv` - Generate the regional Michelin import CSV.
 - `npm run gmaps:migrate-manifests` - Migrate checkpoint history into local list manifests.
 - `npm run audit:takeout` - Compare an expected CSV with Google Takeout lists.
+- `npm run gmaps:save-list -- places.csv --note-only` - Repair notes only for places already saved in their lists.
 - `make clean` - Remove generated artifacts.
 
 ## Rules
