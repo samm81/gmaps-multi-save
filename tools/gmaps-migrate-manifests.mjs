@@ -10,6 +10,8 @@ const options = getopts(process.argv.slice(2), {
   alias: {
     checkpoint: ["checkpoint", "c"],
     manifestDir: ["manifest-dir", "manifests"],
+    includePartialSaves: ["include-partial-saves"],
+    excludeListName: ["exclude-list-name", "exclude-list"],
     dryRun: ["dry-run"],
     help: ["h"],
   },
@@ -26,10 +28,13 @@ function optionValues(value) {
 function usage() {
   return [
     "usage: npm run gmaps:migrate-manifests -- --checkpoint file [--checkpoint file ...]",
-    "       [--manifest-dir local] [--dry-run]",
+    "       [--manifest-dir local] [--include-partial-saves]",
+    "       [--exclude-list-name name] [--dry-run]",
     "",
     "Successful save attempts become per-list manifests. Successful removals",
-    "remove the corresponding place from its list manifest.",
+    "remove the corresponding place from its list manifest. With",
+    "--include-partial-saves, verified note-field failures are included when",
+    "Google Maps had already returned a place URL after list membership.",
   ].join("\n");
 }
 
@@ -44,15 +49,23 @@ if (!checkpointFiles.length) {
   process.exitCode = 1;
 } else {
   const events = [];
+  const excludedListNames = new Set(optionValues(options.excludeListName));
+  let partialSaveCount = 0;
   let sequence = 0;
 
   for (const checkpointFile of checkpointFiles) {
     const checkpoint = JSON.parse(await readFile(checkpointFile, "utf8"));
     for (const attempt of checkpoint.attempts ?? []) {
-      if (attempt.status !== "succeeded") continue;
+      const isPartialSave =
+        options.includePartialSaves &&
+        attempt.status === "failed" &&
+        /could not find note field/i.test(String(attempt.error ?? ""));
+      if (attempt.status !== "succeeded" && !isPartialSave) continue;
+      if (excludedListNames.has(attempt.listName)) continue;
 
       const entry = manifestEntryFromAttempt(attempt);
       if (!entry) continue;
+      if (isPartialSave) partialSaveCount += 1;
 
       events.push({
         ...entry,
@@ -119,6 +132,11 @@ if (!checkpointFiles.length) {
   } else {
     console.log(
       `wrote ${entriesByList.size} manifest(s) with ${totalEntries} entries to ${options.manifestDir}`
+    );
+  }
+  if (partialSaveCount) {
+    console.log(
+      `${options.dryRun ? "would include" : "included"} ${partialSaveCount} note-field partial save(s)`
     );
   }
   if (conflicts) {
