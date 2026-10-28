@@ -1,15 +1,9 @@
 /archive/bookmarklet/bookmarklet-eater.js
-node_modules
+node_modules/
 
-build/
-data/
+/build/
+/data/
 /archive/bookmarklet/csv-to-gmaps-paste-snippet.mjs
 /.playwright/
 /.playwright-cli/
-output/playwright/
-/_michelin/
-/Takeout/
-/local/
-/takeout*.tgz
-/takeout*.zip
-michelin-regional-migration.md
+/output/
