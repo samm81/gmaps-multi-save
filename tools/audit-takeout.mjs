@@ -17,7 +17,6 @@ const diffColumns = [
   "reason",
   "matchMethod",
   "candidateCount",
-  "listName",
   "sourceListName",
   "sourceRow",
   "sourceName",
@@ -45,7 +44,6 @@ const noteColumns = [
   "reason",
   "matchMethod",
   "membershipStatus",
-  "listName",
   "sourceListName",
   "sourceRow",
   "sourceName",
@@ -146,8 +144,10 @@ notes, and normalized names in that order. A value is not matched when it is
 duplicated on either side. Unique cross-list values are reported as wrong-list
 relations. Unique close-enough name variants in the same list are accepted as
 matches; name variants with multiple candidates remain ambiguous.
+Each wrong-list relation is reported once with both the expected and Takeout
+list names.
 
-The output CSV contains only missing and extra memberships. Use
+The output CSV contains missing, extra, and wrong-list memberships. Use
 --notes-output to write a separate audit of current source notes that are
 missing or different in Takeout. Use --changes-output to write source rows
 that were added, removed, renamed, moved, or had metadata updated.
@@ -661,6 +661,7 @@ function sourceIdentityValue(row, field) {
     const note = normalizeText(row.note);
     return name && note ? `${name}\u0000${note}` : "";
   }
+  if (field === "address") return normalizeText(row.address);
   return "";
 }
 
@@ -840,6 +841,7 @@ function matchSourceRows(
     ["michelinUrl", candidateFilter],
     ["name+note", candidateFilter],
     ["name+address", candidateFilter],
+    ["address", candidateFilter],
   ];
 
   for (const [field, candidateFilter] of matchSteps) {
@@ -1082,10 +1084,15 @@ function buildDiffRow(status, reason, matchMethod, candidateCount, source, takeo
     reason,
     matchMethod,
     candidateCount,
-    listName: source?.listName ?? takeout?.listName ?? "",
     ...sourceFields(source),
     ...takeoutFields(takeout),
   };
+}
+
+function hasDescriptionChanged(source, takeout) {
+  const sourceNote = normalizeText(source?.note);
+  const takeoutNote = normalizeText(takeout?.note);
+  return sourceNote && takeoutNote && sourceNote !== takeoutNote;
 }
 
 function buildDiffRows(
@@ -1095,37 +1102,56 @@ function buildDiffRows(
   takeoutMatched,
   sourceRelated,
   takeoutRelated,
-  relationBySource,
-  relationByTakeout
+  relations,
+  primaryPairs
 ) {
   const rows = [];
 
-  for (const source of sourceRows) {
-    if (sourceMatched.has(source.id)) continue;
+  for (const pair of primaryPairs) {
+    if (!hasDescriptionChanged(pair.source, pair.takeout)) continue;
+    rows.push(
+      buildDiffRow(
+        "description-changed",
+        "description-changed",
+        pair.field,
+        1,
+        pair.source,
+        pair.takeout
+      )
+    );
+  }
 
-    const relation = relationBySource.get(source.id);
-    const evidence = relation
-      ? null
-      : findCandidateEvidence(
-          source,
-          takeoutRows,
-          takeoutMatched,
-          takeoutRelated,
-          "source"
-        );
-    const takeout = relation?.takeout ?? evidence?.candidate ?? null;
-    const reason =
-      relation?.kind === "wrong-list"
-        ? "wrong-list"
-        : relation?.kind === "name-variant"
-          ? "ambiguous-name"
-          : evidence?.reason ?? "missing-from-list";
+  for (const relation of relations) {
+    rows.push(
+      buildDiffRow(
+        "wrong-list",
+        "wrong-list",
+        relation.field,
+        1,
+        relation.source,
+        relation.takeout
+      )
+    );
+  }
+
+  for (const source of sourceRows) {
+    if (sourceMatched.has(source.id) || sourceRelated.has(source.id)) continue;
+
+    const evidence = findCandidateEvidence(
+      source,
+      takeoutRows,
+      takeoutMatched,
+      takeoutRelated,
+      "source"
+    );
+    const takeout = evidence?.candidate ?? null;
+    const reason = evidence?.reason ?? "missing-from-list";
     rows.push(
       buildDiffRow(
         "missing",
         reason,
-        relation?.field ?? evidence?.field ?? "",
-        relation ? 1 : evidence?.candidateCount ?? 0,
+        evidence?.field ?? "",
+        evidence?.candidateCount ?? 0,
         source,
         takeout
       )
@@ -1133,31 +1159,25 @@ function buildDiffRows(
   }
 
   for (const takeout of takeoutRows) {
-    if (takeoutMatched.has(takeout.id)) continue;
+    if (takeoutMatched.has(takeout.id) || takeoutRelated.has(takeout.id)) {
+      continue;
+    }
 
-    const relation = relationByTakeout.get(takeout.id);
-    const evidence = relation
-      ? null
-      : findCandidateEvidence(
-          takeout,
-          sourceRows,
-          sourceMatched,
-          sourceRelated,
-          "takeout"
-        );
-    const source = relation?.source ?? evidence?.candidate ?? null;
-    const reason =
-      relation?.kind === "wrong-list"
-        ? "wrong-list"
-        : relation?.kind === "name-variant"
-          ? "ambiguous-name"
-          : evidence?.reason ?? "extra-in-list";
+    const evidence = findCandidateEvidence(
+      takeout,
+      sourceRows,
+      sourceMatched,
+      sourceRelated,
+      "takeout"
+    );
+    const source = evidence?.candidate ?? null;
+    const reason = evidence?.reason ?? "extra-in-list";
     rows.push(
       buildDiffRow(
         "extra",
         reason,
-        relation?.field ?? evidence?.field ?? "",
-        relation ? 1 : evidence?.candidateCount ?? 0,
+        evidence?.field ?? "",
+        evidence?.candidateCount ?? 0,
         source,
         takeout
       )
@@ -1216,23 +1236,12 @@ function buildNoteRows(
       reason,
       matchMethod: pair.field,
       membershipStatus: pair.membershipStatus,
-      listName: pair.source.listName,
       ...sourceFields(pair.source),
       ...takeoutFields(pair.takeout),
     });
   }
 
   return rows;
-}
-
-function indexRelations(relations) {
-  const bySource = new Map();
-  const byTakeout = new Map();
-  for (const relation of relations) {
-    bySource.set(relation.source.id, relation);
-    byTakeout.set(relation.takeout.id, relation);
-  }
-  return { bySource, byTakeout };
 }
 
 function countBy(rows, key) {
@@ -1245,8 +1254,8 @@ function countBy(rows, key) {
   return Object.fromEntries(counts);
 }
 
-function countByList(rows) {
-  return countBy(rows, "listName");
+function countByList(rows, key = "listName") {
+  return countBy(rows, key);
 }
 
 function optionValues(value) {
@@ -1315,7 +1324,6 @@ async function main() {
     primary.takeoutMatched
   );
   const relations = crossList.relations;
-  const relationIndexes = indexRelations(relations);
   const diff = buildDiffRows(
     membershipSourceRows,
     takeoutRows,
@@ -1323,8 +1331,8 @@ async function main() {
     primary.takeoutMatched,
     crossList.sourceRelated,
     crossList.takeoutRelated,
-    relationIndexes.bySource,
-    relationIndexes.byTakeout
+    relations,
+    primary.pairs
   );
   const currentSourceById = new Map(
     currentSourceRows.map((row) => [row.id, row])
@@ -1365,6 +1373,10 @@ async function main() {
     matchedRows: primary.sourceMatched.size,
     missingRows: diff.filter((row) => row.status === "missing").length,
     extraRows: diff.filter((row) => row.status === "extra").length,
+    descriptionChangedRows: diff.filter(
+      (row) => row.status === "description-changed"
+    ).length,
+    wrongListRows: diff.filter((row) => row.status === "wrong-list").length,
     ambiguousMembershipRows: diff.filter((row) =>
       ["ambiguous-match", "ambiguous-name"].includes(row.reason)
     ).length,
@@ -1385,10 +1397,14 @@ async function main() {
     currentSourceCounts: countByList(currentSourceRows),
     takeoutCounts: Object.fromEntries(listCounts),
     missingCounts: countByList(
-      diff.filter((row) => row.status === "missing")
+      diff.filter((row) => row.status === "missing"),
+      "sourceListName"
     ),
-    extraCounts: countByList(diff.filter((row) => row.status === "extra")),
-    noteIssueCounts: countByList(notes),
+    extraCounts: countByList(
+      diff.filter((row) => row.status === "extra"),
+      "takeoutListName"
+    ),
+    noteIssueCounts: countByList(notes, "sourceListName"),
     sourceChangeRows: sourceChanges.rows.length,
     sourceChangeCounts: countBy(sourceChanges.rows, "changeType"),
     sourceChangeReasonCounts: countBy(sourceChanges.rows, "changes"),
@@ -1414,6 +1430,7 @@ async function main() {
   console.log(`matched: ${primary.sourceMatched.size}`);
   console.log(`missing: ${report.missingRows}`);
   console.log(`extra: ${report.extraRows}`);
+  console.log(`description changed: ${report.descriptionChangedRows}`);
   console.log(`ambiguous membership rows: ${report.ambiguousMembershipRows}`);
   console.log(`note issues: ${report.noteIssueRows}`);
   if (ignoredFiles.length) {
